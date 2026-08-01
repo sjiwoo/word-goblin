@@ -48,7 +48,7 @@ var SENDER_NAME = 'Word Goblin';
  * if the codeVersion shown there is not this value, the DEPLOYMENT is still serving older
  * code — save the file, then Deploy → Manage deployments → ✏️ → New version → Deploy.
  */
-var CODE_VERSION = '2026-08-01-invite-v5c';
+var CODE_VERSION = '2026-08-01-invite-v5d';
 
 /** Where the app lives — used to build invite links. */
 var APP_URL = 'https://sjiwoo.github.io/word-goblin/';
@@ -149,6 +149,15 @@ function doGet(e) {
   // call cannot run, every sign-in fails no matter how correct the client ID is.
   if (String(params.action || '').toLowerCase() === 'selftest') {
     var test = { ok: true, codeVersion: CODE_VERSION, check: 'external requests (needed to verify sign-ins)' };
+
+    // Which identity is this request running as? With "Execute as: User accessing the web
+    // app", an anonymous visitor runs with NO authorization, so UrlFetchApp is refused even
+    // though the owner granted everything — the deployment setting, not a missing grant.
+    // (Boolean only: the owner's address is not published here.)
+    var runsAsOwner = false;
+    try { runsAsOwner = !!Session.getEffectiveUser().getEmail(); } catch (err) { runsAsOwner = false; }
+    test.executesAsOwner = runsAsOwner;
+
     try {
       var probe = UrlFetchApp.fetch(
         'https://oauth2.googleapis.com/tokeninfo?id_token=selftest-not-a-real-token',
@@ -160,11 +169,15 @@ function doGet(e) {
     } catch (err) {
       test.externalRequests = 'BLOCKED';
       test.error = String(err).slice(0, 300);
-      test.verdict = 'This script is not authorized to make external requests, so it can never ' +
-                     'verify a sign-in. Fix: open the Apps Script editor, run any function once ' +
-                     '(e.g. checkGoogleLogin), accept the permission prompt — including Advanced → ' +
-                     '"Go to Word Goblin (unsafe)", which is normal for your own script — then ' +
-                     'Deploy → Manage deployments → ✏️ → New version → Deploy.';
+      test.verdict = runsAsOwner
+        ? 'This script is not authorized to make external requests. Fix: in the Apps Script ' +
+          'editor run authorizeNow(), accept the permission prompt — including Advanced → ' +
+          '"Go to Word Goblin (unsafe)", which is normal for your own script — then ' +
+          'Deploy → Manage deployments → ✏️ → New version → Deploy.'
+        : 'THIS IS THE PROBLEM: the deployment runs as the visitor, not as you, so it has no ' +
+          'permissions at all. Fix: Deploy → Manage deployments → ✏️ → set "Execute as: Me" ' +
+          '(NOT "User accessing the web app"), keep "Who has access: Anyone", → New version → ' +
+          'Deploy. No re-authorization needed.';
     }
     return jsonOut_(test);
   }
@@ -611,14 +624,20 @@ function googleLogin_(idToken, inviteToken) {
       // The call never came back at all, so this is not about the credential: the script
       // could not reach Google's verification service. Missing authorization is the usual
       // reason, and ?action=selftest settles it in one browser tab.
+      var asOwner = false;
+      try { asOwner = !!Session.getEffectiveUser().getEmail(); } catch (e2) { asOwner = false; }
       return jsonOut_({
         ok: false,
         code: 'verifierUnreachable',
         error: 'This backend could not run its sign-in verification' +
                (fetchError ? ' (' + fetchError.slice(0, 140) + ')' : '') +
-               '. Owner fix: it is almost always missing authorization — open the Apps Script ' +
-               'editor, run any function once and accept the permission prompt, then redeploy a ' +
-               'New version. Add ?action=selftest to your web-app URL to confirm.'
+               '. Owner fix: ' + (asOwner
+                 ? 'run authorizeNow() in the Apps Script editor, accept the permission prompt, ' +
+                   'then redeploy a New version.'
+                 : 'the deployment is set to run as the visitor, so it has no permissions — open ' +
+                   'Deploy → Manage deployments → ✏️ and set "Execute as: Me", then deploy a New ' +
+                   'version.') +
+               ' Add ?action=selftest to your web-app URL for the full check.'
       });
     }
     return jsonOut_({

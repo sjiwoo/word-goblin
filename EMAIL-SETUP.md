@@ -243,6 +243,13 @@ service, so no sign-in can ever succeed. Confirm and fix in two steps:
 1. Open **`<your /exec URL>?action=selftest`**. `externalRequests: "working"` (with
    `tokeninfoHttp: 400`, the healthy answer for a dummy token) means this is not your
    problem; `"BLOCKED"` names it outright and prints the underlying error.
+
+   Read **`executesAsOwner`** first. If it is `false`, the deployment is set to **Execute
+   as: User accessing the web app**, so anonymous visitors run with no permissions at all
+   and `UrlFetchApp` is refused no matter what you authorize. That is a deployment setting,
+   not a missing grant: **Deploy → Manage deployments → ✏️ → Execute as: Me** (keep *Who has
+   access: Anyone*) **→ New version → Deploy**. The giveaway is that the editor never shows
+   an authorization dialog, because your own account already granted everything.
 2. To grant it: in the Apps Script editor run **`authorizeNow()`** — it touches every
    service this script needs, which is what makes the authorization dialog appear. Accept
    it, including **Advanced → "Go to Word Goblin (unsafe)"**, Google's standard wording for
