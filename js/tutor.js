@@ -455,7 +455,7 @@
     var head = el('header', 'tutor-head');
     var ht = el('div', 'tutor-head-titles');
     ht.appendChild(el('strong', 'tutor-title', 'Ask the Goblin'));
-    ht.appendChild(el('span', 'tutor-model', cfg.model));
+    ht.appendChild(el('span', 'tutor-model-tag', cfg.model));
     head.appendChild(ht);
     var tools = el('div', 'tutor-head-tools');
     tools.appendChild(U.button('↺', 'icon-btn', function () {
@@ -571,7 +571,7 @@
     }
     sel.addEventListener('change', function () {
       saveCfg({ model: sel.value });
-      var tag = panel && panel.querySelector('.tutor-model');
+      var tag = panel && panel.querySelector('.tutor-model-tag');
       if (tag) tag.textContent = cfg.model;
     });
     p.appendChild(field('Model', sel));
@@ -625,7 +625,7 @@
       if (typeof o.apiKey === 'string' && o.apiKey) patch.apiKey = o.apiKey;
       if (typeof o.model === 'string' && o.model) patch.model = o.model;
       saveCfg(patch);
-      var tag = panel && panel.querySelector('.tutor-model');
+      var tag = panel && panel.querySelector('.tutor-model-tag');
       if (tag) tag.textContent = cfg.model;
     },
     onConfigChange: null

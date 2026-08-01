@@ -1053,7 +1053,7 @@ input, textarea, button, select { font: inherit; color: inherit; }
 }
 .tutor-head-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tutor-title { font-family: var(--serif); font-size: 1.05rem; }
-.tutor-model { font-family: var(--mono); font-size: .7rem; opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tutor-model-tag { font-family: var(--mono); font-size: .7rem; opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tutor-head-tools { display: flex; gap: 4px; }
 
 .tutor-scroll {
