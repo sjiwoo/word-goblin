@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Word Goblin — a self-contained Korean and Mandarin Chinese course with textbook-grade lessons, click-to-hear audio and the etymology of every word.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#191713" media="(prefers-color-scheme: dark)">
+<title>Word Goblin</title>
+<link rel="stylesheet" href="css/style.css">
+
+<!-- PWA. Every path is relative so the app works from a GitHub Pages subpath. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Word Goblin">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+</head>
+<body>
+
+<a class="skip-link" href="#app">Skip to content</a>
+
+<main id="app" class="app" role="main">
+  <noscript>
+    <p style="padding:2rem;max-width:40rem;margin:0 auto;">
+      Word Goblin is an interactive course and needs JavaScript enabled. No network connection is
+      required — everything runs locally in your browser.
+    </p>
+  </noscript>
+</main>
+
+<!-- ============================ curriculum data (plain scripts, no modules) -->
+<script src="data/korean/foundation.js"></script>
+<script src="data/korean/unit01.js"></script>
+<script src="data/korean/unit02.js"></script>
+<script src="data/korean/unit03.js"></script>
+<script src="data/korean/unit04.js"></script>
+<script src="data/korean/unit05.js"></script>
+<script src="data/korean/unit06.js"></script>
+<script src="data/korean/unit07.js"></script>
+<script src="data/korean/unit08.js"></script>
+<script src="data/korean/unit09.js"></script>
+<script src="data/chinese/foundation.js"></script>
+<script src="data/chinese/unit01.js"></script>
+<script src="data/chinese/unit02.js"></script>
+<script src="data/chinese/unit03.js"></script>
+<script src="data/chinese/unit04.js"></script>
+<script src="data/chinese/unit05.js"></script>
+<script src="data/chinese/unit06.js"></script>
+<script src="data/chinese/unit07.js"></script>
+<script src="data/chinese/unit08.js"></script>
+<script src="data/chinese/unit09.js"></script>
+
+<!-- ============================================================ app engine -->
+<script src="js/audio.js"></script>
+<script src="js/progress.js"></script>
+<script src="js/quiz.js"></script>
+<script src="js/lesson.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

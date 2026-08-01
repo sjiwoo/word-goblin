@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Fable Lingua">
+  <title>Fable Lingua</title>
+  <defs>
+    <linearGradient id="taegeuk" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f4fa3"/>
+      <stop offset="100%" stop-color="#c8102e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ivory paper -->
+  <rect width="512" height="512" rx="108" fill="#f6f1e7"/>
+  <rect x="14" y="14" width="484" height="484" rx="96" fill="none" stroke="#d5c8af" stroke-width="3"/>
+
+  <!-- ink: 語 (language) -->
+  <text x="228" y="352" font-family="'Nanum Myeongjo','Songti SC',SimSun,Batang,'MS Mincho',serif"
+        font-size="286" font-weight="600" fill="#221f1b" text-anchor="middle">語</text>
+
+  <!-- taegeuk rule -->
+  <rect x="86" y="398" width="184" height="10" rx="5" fill="url(#taegeuk)"/>
+
+  <!-- cinnabar seal: 한 -->
+  <rect x="300" y="300" width="150" height="150" rx="20" fill="#c8352a"/>
+  <text x="375" y="404" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',sans-serif"
+        font-size="104" font-weight="700" fill="#f6f1e7" text-anchor="middle">한</text>
+</svg>
