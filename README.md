@@ -30,14 +30,17 @@ audio, offline support, cross-device progress sync, and a free daily mini-lesson
 
 ## Using it
 
-Open the live URL, or open `index.html` straight from disk — the app is 100% static and
-works offline (no build step, no CDN, no server).
+Open the live URL and sign in with Google — after that first sign-in the app is 100%
+static and works offline (no build step, no CDN, no server). Opening `index.html`
+straight from disk still runs the code, but the sign-in gate needs https, so first-time
+use has to happen on the hosted version.
 
-On a new device the app opens with a **sign-in landing page**: enter your Apps Script URL
-and press *Sign in with Google* — your progress, sync key and settings all fill in from
-that one click. (Where sign-in is impossible — opened from disk, offline, or the backend
-isn't set up — a "continue on this device" link appears instead, so the app never locks
-you out. Once a device is signed in it goes straight to the app, including offline.)
+On a new device the app opens with a **sign-in landing page**: unlock or enter your Apps
+Script URL and press *Sign in with Google* — your progress, sync key and settings all
+fill in from that one click. Google sign-in is **required**: there is no way past the
+landing page without it, so the app only works on the hosted (https) version where the
+Google button can load. Once a device is signed in it goes straight to the app on every
+later visit, including offline.
 Editing `js/config.js` with your script URL saves even that pasting step — and to keep the
 URL out of the public repo, open `tools/encrypt-url.html` locally, encrypt it with a
 passphrase (5+ random words; the tool has a dice button), and commit the encrypted blob

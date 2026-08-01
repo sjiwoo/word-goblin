@@ -70,7 +70,7 @@ window.FableProgress = (function () {
         theme: 'auto',           // auto | light | dark
         subscribed: false,
         lastSyncAt: null,        // ISO string — last mini-lesson queue upload
-        signedInAs: '',          // landing-gate pass: email, or 'local' for offline/dev skip
+        signedInAs: '',          // landing-gate pass: verified Google email ('local' is retired — re-gates)
         syncKey: '',             // cross-device progress sync key (v3)
         syncEnabled: false,
         lastPushAt: null,        // ISO string — last saveProgress

@@ -19,9 +19,10 @@
  *
  * Why a sync key: the web-app URL is public, so an email address alone must not be enough
  * to read or overwrite somebody's saved progress. Each email gets a `key:<email>` token,
- * claimed by the first request that presents one; after that every action for that address
- * must present the matching key. Progress sync and email subscription are independent —
- * you can sync progress without ever subscribing to the emails.
+ * claimed by the first request that presents one; every action must present the matching
+ * key, and requests carrying no key at all are refused outright. Progress sync and email
+ * subscription are independent — you can sync progress without ever subscribing to the
+ * emails.
  *
  * Setup instructions live in EMAIL-SETUP.md next to this file.
  */
@@ -331,27 +332,29 @@ function sync_(email, key, queues) {
  * Checks the presented key against the stored one, claiming it if this address does not
  * have a key yet. Returns true when the caller may proceed, false for "bad key".
  *
- * Rules (contract v3):
- *   - No key stored yet + a key presented  → claim it, allow. First device wins.
- *   - No key stored yet + no key presented → allow, claim nothing. Keeps pre-v3 clients
- *     (and anyone who only uses the email reminders) working unchanged.
+ * Rules (hardened, 2026-08-01):
+ *   - No key presented → refuse, always. Anonymous requests can do nothing — this closes
+ *     the old pre-v3 keyless window (which let anyone who knew the URL subscribe an
+ *     address that had no key yet, or probe it).
+ *   - No key stored yet + a key presented → claim it, allow. First device wins.
  *   - Key stored → the presented key must match exactly, otherwise refuse.
  * An existing key is never overwritten; the only way to clear it is deleteAll.
+ * (The app has always generated its key client-side before calling, so nothing legit
+ * arrives keyless.)
  *
  * Callers must already hold the script lock when they mutate anything afterwards, so the
  * claim and the write land together.
  */
 function authorize_(email, key) {
   var provided = normalizeKey_(key);
+  if (!provided) return false;
+
   var props = PropertiesService.getScriptProperties();
   var stored = props.getProperty(keyKey_(email));
-
   if (stored) return provided === stored;
 
-  if (provided) {
-    props.setProperty(keyKey_(email), provided);
-    Logger.log('Sync key claimed for ' + email);
-  }
+  props.setProperty(keyKey_(email), provided);
+  Logger.log('Sync key claimed for ' + email);
   return true;
 }
 
@@ -456,12 +459,19 @@ function googleLogin_(idToken) {
   }
 }
 
-/** Same alphabet the app uses (Crockford base32, no I/L/O/U) so keys stay typeable. */
+/**
+ * Same alphabet the app uses (Crockford base32, no I/L/O/U) so keys stay typeable.
+ * Entropy comes from Utilities.getUuid() (Java SecureRandom underneath) hashed through
+ * SHA-256 — Math.random() is avoided because its xorshift state is recoverable from a
+ * handful of observed outputs. 256 % 32 == 0, so the mapping below is unbiased.
+ */
 function generateKey_() {
   var alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    Utilities.getUuid() + Utilities.getUuid());
   var out = '';
   for (var i = 0; i < 12; i++) {
-    out += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+    out += alphabet.charAt((digest[i] & 255) % alphabet.length);
   }
   return out;
 }

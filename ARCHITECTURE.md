@@ -91,14 +91,20 @@ and token verification in the user's own Apps Script:
   into `setupGoogleLogin()` and running it once (EMAIL-SETUP.md has the Cloud Console
   walkthrough). The client ID is public; all data access still goes through the sync key.
 - Landing gate (app.js `showLanding`): boot overlays a full-screen sign-in page until
-  `settings.signedInAs` is set (device-local — in `LOCAL_ONLY_SETTINGS` and coerce(), never
-  adopted from the cloud). Strict when sign-in is possible (https + backend `?action=config`
-  returns a client ID); where impossible (file://, offline, unconfigured backend) it shows a
-  "continue on this device" skip that stores `signedInAs:'local'`. Signing in from either the
-  landing or the Settings panel sets `signedInAs` via the shared `completeGoogleLogin()`;
-  "Sign out on this device" (Settings → Cross-device sync) clears it and reloads.
-  `js/config.js` (`window.WORDGOBLIN_DEFAULTS.scriptUrl`) optionally pre-fills the script
-  URL — public by design, ships empty.
+  `settings.signedInAs` holds a verified Google address (device-local — in
+  `LOCAL_ONLY_SETTINGS` and coerce(), never adopted from the cloud). There is NO skip:
+  the retired `signedInAs:'local'` marker from the earlier build re-gates at boot, and
+  file:// copies are told to open the hosted app (GIS needs https). A device that has
+  signed in once boots straight in, including offline, so the installed PWA still works.
+  Signing in from either the landing or the Settings panel sets `signedInAs` via the
+  shared `completeGoogleLogin()`; "Sign out on this device" (Settings → Cross-device
+  sync) clears it and reloads. `js/config.js` (`window.WORDGOBLIN_DEFAULTS`) ships the
+  passphrase-encrypted backend URL — public by design.
+  Honest scope note: the gate (like everything client-side on a public static site) is
+  UX-level, not content security — the curriculum is in a public repo. Real access
+  control lives in the backend: every Code.gs data action requires the per-email sync
+  key (`authorize_` refuses keyless requests outright), and the key is only handed out
+  after Google ID-token verification or first-claim.
 
 ## Data contract (curriculum files)
 

@@ -910,8 +910,10 @@
   function syncActive() { return syncConfigured() && !!P.settings.syncEnabled; }
 
   function keyedBody(obj) {
-    // v3: every action must present the key once one has been claimed for this email
-    if (P.settings.syncKey) obj.key = P.settings.syncKey;
+    // v4: the backend refuses keyless requests outright, so every call carries a key —
+    // generated here on first use if this device never got one from sign-in.
+    if (!P.settings.syncKey) P.setSettings({ syncKey: P.generateSyncKey() });
+    obj.key = P.settings.syncKey;
     return obj;
   }
 
@@ -1708,12 +1710,10 @@
   }
 
   /* ========================================================== landing gate
-   * First thing a new device sees: a full-screen cover asking for Google sign-in.
-   * The gate is strict whenever sign-in is actually possible (hosted app + backend with
-   * a client ID). Where it cannot work — file://, offline, backend not set up — a
-   * "continue on this device" escape appears instead of bricking the app. Once passed
-   * (signedInAs in settings, device-local), boots go straight in, so the installed PWA
-   * still opens instantly offline.
+   * First thing a new device sees: a full-screen cover requiring Google sign-in.
+   * There is no way past it without a verified sign-in — no skip, no local mode.
+   * Once passed (signedInAs in settings, device-local), boots go straight in, so the
+   * installed PWA still opens instantly offline on a device that already signed in.
    */
 
   /**
@@ -1831,13 +1831,6 @@
     urlWrap.appendChild(U.para('Your personal backend from EMAIL-SETUP.md — sign-in, sync and the daily e-mail all live there.', 'field-hint'));
     card.appendChild(urlWrap);
 
-    var skip = U.button('Continue on this device without signing in →', 'landing-skip', function () {
-      P.setSettings({ signedInAs: 'local' });
-      dismiss();
-    });
-    skip.hidden = true;
-    card.appendChild(skip);
-
     inner.appendChild(card);
     ov.appendChild(inner);
 
@@ -1859,25 +1852,22 @@
       if (u !== P.settings.scriptUrl) P.setSettings({ scriptUrl: u });
       U.clear(gHost);
       if (!gsiPossibleHere()) {
-        note.textContent = 'Google sign-in needs the hosted (https) app — this copy is running from disk.';
-        skip.hidden = false;
+        note.textContent = 'Google sign-in only works on the hosted (https) app — open ' +
+          'https://sjiwoo.github.io/word-goblin/ to sign in. Copies opened from disk cannot be used.';
         return;
       }
       if (!u) {
         note.textContent = passWrap.hidden
           ? 'Paste your Apps Script URL below to sign in — or set one up first with EMAIL-SETUP.md.'
           : 'Enter your backend passphrase above to unlock sign-in (or paste the URL below).';
-        skip.hidden = false;
         return;
       }
       note.textContent = 'Checking your backend…';
-      skip.hidden = true;
       var cfgUrl = u + (u.indexOf('?') === -1 ? '?' : '&') + 'action=config';
       window.fetch(cfgUrl).then(function (r) { return r.json(); }).then(function (cfg) {
         var cid = cfg && cfg.googleClientId;
         if (!cid) {
-          note.textContent = 'This backend does not have Google sign-in enabled yet — run setupGoogleLogin() in the Apps Script editor (EMAIL-SETUP.md, "One-click Google sign-in").';
-          skip.hidden = false;
+          note.textContent = 'This backend does not have Google sign-in enabled yet — run setupGoogleLogin() in the Apps Script editor (EMAIL-SETUP.md, "One-click Google sign-in"). Sign-in is required to enter.';
           return;
         }
         renderGoogleButton(cid, gHost, function (resp) {
@@ -1885,15 +1875,13 @@
         }, function (ok) {
           note.textContent = ok
             ? 'Sign in with the Google account whose e-mail you use for Word Goblin.'
-            : 'Could not load Google sign-in — check your connection.';
-          skip.hidden = ok;
+            : 'Could not load Google sign-in — check your connection, then reload this page.';
         });
       })['catch'](function () {
         note.textContent = 'Could not reach that backend. If the URL is right (ends in /exec) and you are online, ' +
           'the usual cause is the deployment’s access setting: in script.google.com open Deploy → Manage ' +
           'deployments → ✏️, set “Execute as: Me” and “Who has access: Anyone”, pick New version, Deploy. ' +
           'Test: open the URL with ?action=config added, in a private window — you should see JSON, not a sign-in page.';
-        skip.hidden = false;
       });
     }
 
@@ -1959,9 +1947,9 @@
 
     registerServiceWorker();
 
-    // Landing gate: until this device has signed in (or explicitly skipped where sign-in
-    // is impossible), a full-screen cover sits over the app.
-    if (!P.settings.signedInAs) showLanding();
+    // Landing gate: until this device has signed in with Google, a full-screen cover
+    // sits over the app. 'local' is the retired skip marker — those devices re-gate.
+    if (!P.settings.signedInAs || P.settings.signedInAs === 'local') showLanding();
 
     // Voices arrive asynchronously; refresh the Settings hints when they do.
     A.onReady(function () {
