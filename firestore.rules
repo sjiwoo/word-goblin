@@ -1,0 +1,109 @@
+// ============================================================================
+// Word Goblin — Firestore security rules
+// ============================================================================
+// These rules are the REAL access control for the app's cloud data. The
+// firebaseConfig values in js/config.js are public by design; nothing in the
+// client can be trusted. Everything a signed-in browser is allowed to do is
+// decided right here, on Google's servers.
+//
+// How to install: Firebase console → Build → Firestore Database → Rules tab →
+// replace the whole editor contents with this file → Publish.
+// (FIREBASE-SETUP.md walks through it step by step.)
+//
+// The data model these rules protect:
+//
+//   allowlist/{email}   one document per member. The DOCUMENT ID is the
+//                       member's Google address, lowercase (e.g.
+//                       "undagada@gmail.com"). The document needs no fields —
+//                       existing is what makes someone a member. The owner
+//                       adds/removes these by hand in the Firebase console.
+//
+//   users/{uid}         one document per member, keyed by their Firebase Auth
+//                       UID. Holds { email, blob, updatedAt, pushedAt } where
+//                       `blob` is the app's exported progress as one JSON
+//                       string.
+// ============================================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Helper functions -------------------------------------------------
+
+    // True when the request comes from someone signed in with Firebase Auth.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // The signed-in user's email, lowercased — so it always matches the
+    // lowercase document IDs used in the allowlist collection.
+    function userEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    // Google marks whether it has verified the account's email address.
+    // (For "Sign in with Google" accounts this is essentially always true;
+    // requiring it blocks any odd edge case where it is not.)
+    function emailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    // Membership = "does a doc with this user's email exist in allowlist?".
+    // This is the whole invite system: one document in the console per member.
+    function isMember() {
+      return exists(/databases/$(database)/documents/allowlist/$(userEmail()));
+    }
+
+    // ---- allowlist: members may check ONLY their own entry -----------------
+
+    match /allowlist/{email} {
+      // A signed-in user may fetch the one doc whose ID equals their own
+      // email (the app uses this to tell them "you're not a member" nicely).
+      // `get` deliberately, not `read`: `read` would also allow `list`, i.e.
+      // downloading the whole membership roster.
+      allow get: if signedIn() && userEmail() == email;
+
+      // Nobody can create, change or delete allowlist docs from the app.
+      // The owner manages membership in the Firebase console only.
+      allow list, create, update, delete: if false;
+    }
+
+    // ---- users: each member reads/writes exactly one doc — their own -------
+
+    match /users/{uid} {
+      // Read your own doc: must be signed in, be YOU (uid matches), have a
+      // verified email, and be on the allowlist.
+      allow read: if signedIn()
+                  && request.auth.uid == uid
+                  && emailVerified()
+                  && isMember();
+
+      // Write (create or overwrite) your own doc: same identity checks, plus
+      // sanity checks on what is being written —
+      //   * blob must be a string (the app's JSON export), under 256 KB
+      //     (262144 bytes), comfortably inside Firestore's ~1 MB doc limit;
+      //   * the stored email must be the signed-in user's own address, so a
+      //     doc can never claim to belong to someone else.
+      allow create, update: if signedIn()
+                  && request.auth.uid == uid
+                  && emailVerified()
+                  && isMember()
+                  && request.resource.data.blob is string
+                  && request.resource.data.blob.size() < 262144
+                  && request.resource.data.email == userEmail();
+
+      // The app never deletes progress docs; if a member ever wants theirs
+      // gone, the owner deletes it in the console.
+      allow delete: if false;
+    }
+
+    // ---- Everything else: denied ------------------------------------------
+    // Any collection not matched above (including ones that don't exist yet)
+    // is unreadable and unwritable from clients. Firestore denies by default,
+    // but saying it explicitly makes the intent unmissable.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

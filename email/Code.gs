@@ -1,16 +1,27 @@
 /**
- * Word Goblin — mini-lesson email + progress-sync backend  (contract v5, invite-only)
+ * Word Goblin — daily mini-lesson EMAIL backend  (contract v6, email-only)
  * ------------------------------------------------------------------
  * Single-file Google Apps Script (V8 runtime). No libraries, no server, free forever.
  *
+ * NOTE FOR OWNERS ALREADY DEPLOYED: your live deployment keeps serving whatever version
+ * of this file you last deployed, and the old version keeps sending the daily email just
+ * fine. This slimmed-down v6 file only matters the next time you paste + redeploy — it
+ * removes features that moved elsewhere, it does not change how the email works.
+ *
  * What it does
- *   1. doPost()             receives subscribe / unsubscribe / sync / saveProgress /
- *                           loadProgress / deleteAll calls from the Word Goblin app and
- *                           stores everything in Script Properties.
- *   2. sendDailyReminders() runs once a day (time-driven trigger) and emails every subscriber
- *                           a personalized MINI-LESSON — one "word of the day" per active
- *                           language, taken from the lesson queue the app uploaded.
+ *   1. doPost()             receives subscribe / unsubscribe / sync / deleteAll calls
+ *                           from the Word Goblin app and stores everything in Script
+ *                           Properties.
+ *   2. sendDailyReminders() runs once a day (time-driven trigger) and emails every
+ *                           subscriber a personalized MINI-LESSON — one "word of the day"
+ *                           per active language, taken from the lesson queue the app
+ *                           uploaded.
  *   3. setupTrigger()       you run this ONCE by hand to install the daily trigger.
+ *
+ * What it deliberately does NOT do (since v6): Google sign-in, membership/invites, and
+ * cross-device progress sync all moved to Firebase (Auth + Firestore) — see
+ * FIREBASE-SETUP.md in the repo root. This script is now the email feature and nothing
+ * else, keyed by the app's automatic sync key.
  *
  * Why a queue: this script has no access to the curriculum or to the learner's browser
  * storage, so the app uploads the next few vocabulary items ("the queue") and the script
@@ -18,11 +29,10 @@
  * gracefully degrades to a plain study reminder.
  *
  * Why a sync key: the web-app URL is public, so an email address alone must not be enough
- * to read or overwrite somebody's saved progress. Each email gets a `key:<email>` token,
- * claimed by the first request that presents one; every action must present the matching
- * key, and requests carrying no key at all are refused outright. Progress sync and email
- * subscription are independent — you can sync progress without ever subscribing to the
- * emails.
+ * to change somebody's subscription or queues. Each address gets a `key:<email>` token,
+ * claimed by the FIRST request that presents one; every action must present the matching
+ * key, and requests carrying no key at all are refused outright. The app generates and
+ * remembers this key automatically — the user never sees it.
  *
  * Setup instructions live in EMAIL-SETUP.md next to this file.
  */
@@ -43,23 +53,6 @@ var REMINDER_HOUR = 8;
 /** Shown as the email sender name. */
 var SENDER_NAME = 'Word Goblin';
 
-/**
- * Bumped whenever this file changes. Open `<your /exec URL>?action=diag` in a browser:
- * if the codeVersion shown there is not this value, the DEPLOYMENT is still serving older
- * code — save the file, then Deploy → Manage deployments → ✏️ → New version → Deploy.
- */
-var CODE_VERSION = '2026-08-01-invite-v5d';
-
-/** Where the app lives — used to build invite links. */
-var APP_URL = 'https://sjiwoo.github.io/word-goblin/';
-
-/**
- * This deployment's /exec URL, embedded (base64, in the URL fragment) in invite links so
- * an invited friend never has to type it. Leave '' to auto-detect; if the auto-detected
- * value ever ends in /dev (it can when run from the editor), paste the real /exec URL here.
- */
-var SCRIPT_URL = '';
-
 /* --- Queue limits. Script Properties cap each stored value at 9 KB, so queues are
        stored one property per language and are trimmed to fit before writing. --- */
 var MAX_QUEUE_ITEMS = 10;      // items kept per language
@@ -68,21 +61,13 @@ var MAX_BACKGROUND_PARAGRAPHS = 2;
 var MAX_BACKGROUND_CHARS = 400;
 var MAX_FIELD_CHARS = 200;     // term / roman / gloss / pos / unit / example fields
 
-/* --- Progress-blob limits. The saved app state is chunked across properties because a
-       single Script Property value cannot exceed 9 KB. --- */
-var PROGRESS_CHUNK_BYTES = 8192;    // 8 KB per chunk, under the 9 KB property limit
-var MAX_PROGRESS_BYTES = 102400;    // 100 KB total; larger blobs are rejected outright
-var MAX_KEY_CHARS = 128;            // sanity ceiling on the sync key
+/** Sanity ceiling on the sync key. */
+var MAX_KEY_CHARS = 128;
 
 /** Script Properties key prefixes. */
 var SUB_PREFIX = 'sub:';            // sub:<email>          -> {languages, subscribedAt}
 var QUEUE_PREFIX = 'queue:';        // queue:<email>:<lang> -> {items, pointer, syncedAt}
 var KEY_PREFIX = 'key:';            // key:<email>          -> sync key (plain string)
-var PROG_PREFIX = 'prog:';          // prog:<email>:<n>     -> one chunk of the JSON blob
-var PROGMETA_PREFIX = 'progmeta:';  // progmeta:<email>     -> {chunks, bytes, updatedAt}
-var ALLOW_PREFIX = 'allow:';        // allow:<email>        -> {addedAt, via} member whitelist
-var INVITE_PREFIX = 'invite:';      // invite:<token>       -> {createdAt, note} single-use
-var INVITE_TTL_DAYS = 30;           // unredeemed invites expire after this many days
 var LEGACY_KEY = 'subscribers';     // v1 single-blob storage, migrated automatically
 
 /** Returned verbatim whenever the presented sync key does not match the stored one. */
@@ -124,103 +109,11 @@ var LANGUAGE_ORDER = ['korean', 'chinese'];
    ================================================================== */
 
 /**
- * GET handler. Two jobs:
- *   1. `?action=loadProgress&email=…&key=…` — fallback read path for clients that cannot
- *      POST (or whose POST is blocked); same result shape as the POST action.
- *   2. no parameters — a tiny status page so you can paste the /exec URL into a browser
- *      and confirm the deployment is live. Counts only; no addresses, keys or content.
+ * GET handler: a tiny status page so you can paste the /exec URL into a browser and
+ * confirm the deployment is live. Counts only; no addresses, keys or lesson content.
  */
 function doGet(e) {
   migrateLegacy_();
-
-  var params = (e && e.parameter) ? e.parameter : {};
-
-  // `?action=config` — public, non-secret client configuration (the OAuth client ID is
-  // public by design). The app uses this to decide whether to show "Sign in with Google".
-  if (String(params.action || '').toLowerCase() === 'config') {
-    return jsonOut_({ ok: true, googleClientId: storedClientId_() });
-  }
-
-  // `?action=diag` — self-check you can read in any browser tab, so diagnosing a broken
-  // sign-in never depends on finding the Apps Script execution log. Counts and public
-  // values only: no addresses, no sync keys, no invite tokens.
-  // `?action=selftest` — proves in a browser tab whether this script may make external
-  // requests at all. Sign-in verification calls Google's tokeninfo endpoint, so if that
-  // call cannot run, every sign-in fails no matter how correct the client ID is.
-  if (String(params.action || '').toLowerCase() === 'selftest') {
-    var test = { ok: true, codeVersion: CODE_VERSION, check: 'external requests (needed to verify sign-ins)' };
-
-    // Which identity is this request running as? With "Execute as: User accessing the web
-    // app", an anonymous visitor runs with NO authorization, so UrlFetchApp is refused even
-    // though the owner granted everything — the deployment setting, not a missing grant.
-    // (Boolean only: the owner's address is not published here.)
-    var runsAsOwner = false;
-    try { runsAsOwner = !!Session.getEffectiveUser().getEmail(); } catch (err) { runsAsOwner = false; }
-    test.executesAsOwner = runsAsOwner;
-
-    try {
-      var probe = UrlFetchApp.fetch(
-        'https://oauth2.googleapis.com/tokeninfo?id_token=selftest-not-a-real-token',
-        { muteHttpExceptions: true });
-      test.externalRequests = 'working';
-      test.tokeninfoHttp = probe.getResponseCode();   // 400 is the expected, healthy answer
-      test.verdict = 'This backend can verify Google sign-ins. If sign-in still fails, the ' +
-                     'cause is elsewhere — open ?action=diag and compare the client ID.';
-    } catch (err) {
-      test.externalRequests = 'BLOCKED';
-      test.error = String(err).slice(0, 300);
-      test.verdict = runsAsOwner
-        ? 'This script is not authorized to make external requests. Fix: in the Apps Script ' +
-          'editor run authorizeNow(), accept the permission prompt — including Advanced → ' +
-          '"Go to Word Goblin (unsafe)", which is normal for your own script — then ' +
-          'Deploy → Manage deployments → ✏️ → New version → Deploy.'
-        : 'THIS IS THE PROBLEM: the deployment runs as the visitor, not as you, so it has no ' +
-          'permissions at all. Fix: Deploy → Manage deployments → ✏️ → set "Execute as: Me" ' +
-          '(NOT "User accessing the web app"), keep "Who has access: Anyone", → New version → ' +
-          'Deploy. No re-authorization needed.';
-    }
-    return jsonOut_(test);
-  }
-
-  if (String(params.action || '').toLowerCase() === 'diag') {
-    var rawId = PropertiesService.getScriptProperties().getProperty('googleClientId');
-    var cleanId = storedClientId_();
-    var allProps = PropertiesService.getScriptProperties().getKeys();
-    var memberCount = 0, inviteCount = 0;
-    for (var d = 0; d < allProps.length; d++) {
-      if (allProps[d].indexOf(ALLOW_PREFIX) === 0) memberCount++;
-      else if (allProps[d].indexOf(INVITE_PREFIX) === 0) inviteCount++;
-    }
-    var problems = [];
-    if (rawId === null) problems.push('No googleClientId is set — run setupGoogleLogin().');
-    else if (rawId !== cleanId) problems.push('The stored client ID had stray whitespace or quotes; this version compares it cleaned, so sign-in still works.');
-    if (cleanId && !/\.apps\.googleusercontent\.com$/.test(cleanId)) {
-      problems.push('The stored client ID does not end in .apps.googleusercontent.com — you may have pasted the client secret or the wrong field.');
-    }
-    if (!memberCount) problems.push('No members besides the script owner yet — invite someone with createInviteLink().');
-    return jsonOut_({
-      ok: true,
-      contract: 'v5',
-      codeVersion: CODE_VERSION,
-      googleLoginEnabled: !!cleanId,
-      googleClientId: cleanId,               // public by design
-      clientIdLooksValid: /\.apps\.googleusercontent\.com$/.test(cleanId),
-      members: memberCount,
-      openInvites: inviteCount,
-      triggerInstalled: hasDailyTrigger_(),
-      problems: problems,
-      hint: 'If sign-in fails with a client-ID mismatch, the googleClientId above is what this ' +
-            'backend expects. Reload the app with a hard refresh so the page picks it up.'
-    });
-  }
-
-  if (String(params.action || '').toLowerCase() === 'loadprogress') {
-    var email = normalizeEmail_(params.email);
-    if (!isValidEmail_(email)) {
-      return jsonOut_({ ok: false, error: 'That does not look like a valid email address.' });
-    }
-    return loadProgress_(email, params.key);
-  }
 
   var emails = listSubscriberEmails_();
   var queueStats = { stored: 0, korean: 0, chinese: 0, itemsPending: 0 };
@@ -236,24 +129,20 @@ function doGet(e) {
     }
   }
 
-  // Counts of the other stored record types — how many, never whose or what.
+  // Count of stored sync keys — how many, never whose or what.
   var allKeys = PropertiesService.getScriptProperties().getKeys();
-  var progressBlobs = 0;
   var syncKeys = 0;
   for (var k = 0; k < allKeys.length; k++) {
-    if (allKeys[k].indexOf(PROGMETA_PREFIX) === 0) progressBlobs++;
-    else if (allKeys[k].indexOf(KEY_PREFIX) === 0) syncKeys++;
+    if (allKeys[k].indexOf(KEY_PREFIX) === 0) syncKeys++;
   }
 
   return jsonOut_({
     ok: true,
     service: 'Word Goblin email reminders',
-    contract: 'v5 (invite-only + mini-lesson + progress sync)',
-    codeVersion: CODE_VERSION,
+    contract: 'v6 (mini-lesson email only)',
     status: 'running',
     subscribers: emails.length,
     queues: queueStats,
-    progressBlobs: progressBlobs,
     syncKeys: syncKeys,
     reminderHour: REMINDER_HOUR,
     timezone: scriptTimezone_(),
@@ -263,7 +152,7 @@ function doGet(e) {
 }
 
 /**
- * POST handler — subscribe / unsubscribe / sync / saveProgress / loadProgress / deleteAll.
+ * POST handler — subscribe / unsubscribe / sync / deleteAll.
  *
  * The app posts with Content-Type: text/plain so the browser does not fire a CORS
  * preflight (Apps Script cannot answer OPTIONS requests). That means the JSON arrives
@@ -271,17 +160,14 @@ function doGet(e) {
  * it ourselves. Form-encoded bodies are also accepted as a fallback.
  *
  * Requests:
- *   {"action":"subscribe","email":"a@b.com","languages":["korean","chinese"],"queues":{…},"key":"…"}
+ *   {"action":"subscribe","email":"a@b.com","key":"…","languages":["korean","chinese"],"queues":{…}}
  *   {"action":"unsubscribe","email":"a@b.com","key":"…"}
- *   {"action":"sync","email":"a@b.com","queues":{"korean":[QueueItem,…]},"key":"…"}
- *   {"action":"saveProgress","email":"a@b.com","key":"…","updatedAt":"…","progress":{…}}
- *   {"action":"loadProgress","email":"a@b.com","key":"…"}
+ *   {"action":"sync","email":"a@b.com","key":"…","queues":{"korean":[QueueItem,…]}}
  *   {"action":"deleteAll","email":"a@b.com","key":"…"}
  * Response: {"ok":true, ...} or {"ok":false,"error":"..."} — always HTTP 200.
  *
- * Queue/subscription calls from a file:// page are fire-and-forget (the reply cannot be
- * read cross-origin); progress calls are made from the hosted https build, which can read
- * the response.
+ * Calls from a file:// page are fire-and-forget (the reply cannot be read cross-origin);
+ * the hosted https build can read the response and show real feedback.
  */
 function doPost(e) {
   try {
@@ -291,11 +177,6 @@ function doPost(e) {
     if (!body) return jsonOut_({ ok: false, error: 'Could not read request body as JSON.' });
 
     var action = String(body.action || '').toLowerCase();
-
-    // Google login carries no email of its own — the address comes out of the verified
-    // ID token — so it is dispatched before the email check.
-    if (action === 'googlelogin') return googleLogin_(body.idToken, body.inviteToken);
-
     var email = normalizeEmail_(body.email);
 
     if (!isValidEmail_(email)) {
@@ -305,14 +186,11 @@ function doPost(e) {
     if (action === 'subscribe') return subscribe_(email, body.key, body.languages, body.queues);
     if (action === 'unsubscribe') return unsubscribe_(email, body.key);
     if (action === 'sync') return sync_(email, body.key, body.queues);
-    if (action === 'saveprogress') return saveProgress_(email, body.key, body.updatedAt, body.progress);
-    if (action === 'loadprogress') return loadProgress_(email, body.key);
     if (action === 'deleteall') return deleteAll_(email, body.key);
 
     return jsonOut_({
       ok: false,
-      error: 'Unknown action "' + action + '". Use "subscribe", "unsubscribe", "sync", ' +
-             '"saveProgress", "loadProgress" or "deleteAll".'
+      error: 'Unknown action "' + action + '". Use "subscribe", "unsubscribe", "sync" or "deleteAll".'
     });
   } catch (err) {
     // Never let an exception bubble out — the app only knows how to read JSON.
@@ -363,8 +241,8 @@ function subscribe_(email, key, languages, queues) {
 
 /**
  * Removes a subscriber: the sub: record AND both queue: records.
- * Saved progress and the sync key are deliberately kept — opting out of the emails is not
- * the same as deleting your data. Use deleteAll for that.
+ * The sync key is deliberately kept, so the same device can re-subscribe later without
+ * a re-claim. Use deleteAll to wipe everything including the key.
  */
 function unsubscribe_(email, key) {
   var lock = LockService.getScriptLock();
@@ -401,8 +279,7 @@ function sync_(email, key, queues) {
   try {
     if (!authorize_(email, key)) return badKey_(email, 'sync');
 
-    // Lesson queues only make sense for someone receiving the emails, so this action
-    // (unlike progress sync) still requires an active subscription.
+    // Lesson queues only make sense for someone receiving the emails.
     if (!readSub_(email)) {
       Logger.log('sync ignored for non-subscriber: ' + email);
       return jsonOut_({ ok: false, error: 'That address is not subscribed. Subscribe first.' });
@@ -410,6 +287,39 @@ function sync_(email, key, queues) {
     var result = storeQueues_(email, queues);
     Logger.log('Queues synced for ' + email + ': ' + JSON.stringify(result));
     return jsonOut_({ ok: true, action: 'sync', email: email, queues: result });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Wipes everything held for this address: subscription, lesson queues, and the sync key
+ * itself. After this the address is unknown again and the next request presenting a key
+ * claims a fresh one.
+ */
+function deleteAll_(email, key) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    if (!authorize_(email, key)) return badKey_(email, 'deleteAll');
+
+    var props = PropertiesService.getScriptProperties();
+    var hadSub = !!readSub_(email);
+
+    props.deleteProperty(subKey_(email));
+    for (var i = 0; i < LANGUAGE_ORDER.length; i++) {
+      props.deleteProperty(queueKey_(email, LANGUAGE_ORDER[i]));
+    }
+    props.deleteProperty(keyKey_(email));
+
+    Logger.log('deleteAll for ' + email + ': subscription=' + hadSub + ', sync key cleared.');
+
+    return jsonOut_({
+      ok: true,
+      action: 'deleteAll',
+      email: email,
+      deleted: { subscription: hadSub, key: true }
+    });
   } finally {
     lock.releaseLock();
   }
@@ -423,7 +333,7 @@ function sync_(email, key, queues) {
  * Checks the presented key against the stored one, claiming it if this address does not
  * have a key yet. Returns true when the caller may proceed, false for "bad key".
  *
- * Rules (hardened, 2026-08-01):
+ * Rules (hardened):
  *   - No key presented → refuse, always. Anonymous requests can do nothing — this closes
  *     the old pre-v3 keyless window (which let anyone who knew the URL subscribe an
  *     address that had no key yet, or probe it).
@@ -439,13 +349,6 @@ function sync_(email, key, queues) {
 function authorize_(email, key) {
   var provided = normalizeKey_(key);
   if (!provided) return false;
-
-  // Members only (contract v5): an address outside the whitelist cannot claim a key,
-  // store data, or subscribe — so a stranger who learns the URL can do nothing with it.
-  if (!isAllowed_(email)) {
-    Logger.log('Refused non-member request for ' + email);
-    return false;
-  }
 
   var props = PropertiesService.getScriptProperties();
   var stored = props.getProperty(keyKey_(email));
@@ -466,610 +369,6 @@ function badKey_(email, action) {
 function normalizeKey_(value) {
   var key = String(value == null ? '' : value).trim();
   return key.length > MAX_KEY_CHARS ? key.slice(0, MAX_KEY_CHARS) : key;
-}
-
-/* ==================================================================
-   GOOGLE SIGN-IN (contract v4, optional)
-
-   The app renders a "Sign in with Google" button (Google Identity Services, in the
-   browser). The resulting ID token is posted here; this script verifies it against
-   Google's tokeninfo endpoint and, for the proven address, returns the stored sync
-   key (creating one on first login). One click on a new device replaces typing the
-   email + sync key by hand. Set-up: run setupGoogleLogin() once with your OAuth
-   client ID pasted in — see EMAIL-SETUP.md.
-   ================================================================== */
-
-/**
- * ONE-TIME SETUP: paste your OAuth client ID between the quotes and run this once.
- * Create the ID at console.cloud.google.com → APIs & Services → Credentials →
- * Create credentials → OAuth client ID → Web application, with your app's origin
- * (e.g. https://sjiwoo.github.io) under "Authorized JavaScript origins".
- */
-function setupGoogleLogin() {
-  var CLIENT_ID = 'PASTE-YOUR-CLIENT-ID-HERE.apps.googleusercontent.com';
-  if (CLIENT_ID.indexOf('PASTE-YOUR') === 0) {
-    throw new Error('Edit setupGoogleLogin() first: replace the placeholder with your real OAuth client ID, then run it again.');
-  }
-  var id = cleanClientId_(CLIENT_ID);
-  if (!/\.apps\.googleusercontent\.com$/.test(id)) {
-    throw new Error('"' + id + '" does not look like an OAuth client ID — it should end in ' +
-                    '.apps.googleusercontent.com. Copy the Client ID (not the secret) from ' +
-                    'console.cloud.google.com → Credentials.');
-  }
-  PropertiesService.getScriptProperties().setProperty('googleClientId', id);
-  Logger.log('Google sign-in enabled for client ID: ' + id +
-             '\nRemember to redeploy (Deploy → Manage deployments → ✏️ → New version) if you also edited the code.');
-}
-
-/** Strips stray whitespace and pasted surrounding quotes from a client ID. */
-function cleanClientId_(value) {
-  return String(value == null ? '' : value).trim().replace(/^["'<]+|[">']+$/g, '').trim();
-}
-
-/** The configured client ID, always cleaned — stored and compared in one canonical form. */
-function storedClientId_() {
-  return cleanClientId_(PropertiesService.getScriptProperties().getProperty('googleClientId'));
-}
-
-/**
- * RUN THIS when sign-in reports a permission error ("You do not have permission to call
- * UrlFetchApp.fetch"). It deliberately touches every service this script needs, which is
- * what makes Apps Script show the authorization dialog — accept it, including
- * Advanced → "Go to Word Goblin (unsafe)", which is normal for your own script.
- *
- * Then redeploy: Deploy → Manage deployments → ✏️ → New version → Deploy.
- *
- * The result is written to the `lastAuthCheck` script property as well as the log, so you
- * can read it in ⚙ Project Settings → Script Properties if the log is hard to find.
- */
-function authorizeNow() {
-  var report = [];
-
-  try {
-    var probe = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=authcheck',
-      { muteHttpExceptions: true });
-    report.push('external requests : OK (HTTP ' + probe.getResponseCode() + ' — 400 is the healthy answer)');
-  } catch (err) {
-    report.push('external requests : FAILED — ' + err);
-  }
-  try {
-    report.push('send mail         : OK (' + MailApp.getRemainingDailyQuota() + ' left today)');
-  } catch (err) {
-    report.push('send mail         : FAILED — ' + err);
-  }
-  try {
-    report.push('triggers          : OK (' + ScriptApp.getProjectTriggers().length + ' installed)');
-  } catch (err) {
-    report.push('triggers          : FAILED — ' + err);
-  }
-  try {
-    report.push('account           : ' + Session.getEffectiveUser().getEmail());
-  } catch (err) {
-    report.push('account           : FAILED — ' + err);
-  }
-
-  var msg = report.join('\n');
-  Logger.log(msg + '\n\nIf every line says OK, redeploy a New version and sign in again.');
-  PropertiesService.getScriptProperties().setProperty('lastAuthCheck',
-    new Date().toISOString() + '\n' + msg);
-  return msg;
-}
-
-/**
- * DIAGNOSTIC — run this when sign-in fails. Prints the client ID this backend is
- * configured with, flags the usual mistakes (whitespace, quotes, wrong value pasted),
- * and reminds you where the mismatching one would have come from.
- */
-function checkGoogleLogin() {
-  var raw = PropertiesService.getScriptProperties().getProperty('googleClientId');
-  if (raw === null) {
-    Logger.log('No googleClientId property is set. Run setupGoogleLogin() (or add the property by ' +
-               'hand in ⚙ Project Settings → Script Properties).');
-    return;
-  }
-  var clean = cleanClientId_(raw);
-  Logger.log('Stored value, delimited: [' + raw + ']  (' + String(raw).length + ' chars)');
-  Logger.log('After cleaning       : [' + clean + ']  (' + clean.length + ' chars)');
-
-  if (raw !== clean) {
-    Logger.log('⚠ The stored value has stray whitespace or quotes. Older versions of this script ' +
-               'compared it literally, which broke sign-in. Re-save it clean: run setupGoogleLogin() ' +
-               'with the cleaned value above, then redeploy a New version.');
-  }
-  if (!/\.apps\.googleusercontent\.com$/.test(clean)) {
-    Logger.log('⚠ That does not end in .apps.googleusercontent.com — it may be the client SECRET or ' +
-               'the wrong field. Copy the Client ID from console.cloud.google.com → APIs & Services ' +
-               '→ Credentials → your Web application client.');
-  }
-  Logger.log('If sign-in still fails, sign in once more and reopen this Executions log: a mismatch ' +
-             'now prints both the token audience and this stored value, side by side.');
-}
-
-/**
- * Verifies a Google ID token and returns { email, key } for the proven address.
- * Verification is delegated to Google's own tokeninfo endpoint (it checks the
- * signature and expiry); we additionally require our audience, a Google issuer,
- * and a verified email address.
- */
-function googleLogin_(idToken, inviteToken) {
-  var clientId = storedClientId_();
-  if (!clientId) {
-    return jsonOut_({ ok: false, error: 'Google sign-in is not enabled on this backend yet — run setupGoogleLogin() in the Apps Script editor (see EMAIL-SETUP.md).' });
-  }
-  var token = String(idToken == null ? '' : idToken);
-  if (!token) return jsonOut_({ ok: false, error: 'The Google credential was missing. Try signing in again.' });
-
-  var payload = null;
-  var httpCode = 0;
-  var fetchError = '';
-  try {
-    var res = UrlFetchApp.fetch(
-      'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
-      { muteHttpExceptions: true });
-    httpCode = res.getResponseCode();
-    if (httpCode === 200) payload = JSON.parse(res.getContentText());
-    else Logger.log('googleLogin tokeninfo HTTP ' + httpCode + ': ' + res.getContentText().slice(0, 300));
-  } catch (err) {
-    fetchError = String(err);
-    Logger.log('googleLogin tokeninfo threw: ' + fetchError);
-  }
-
-  // Each failure gets its own message and log line — "could not be verified" for
-  // everything made the real cause undiagnosable.
-  if (!payload) {
-    // UrlFetchApp needs the script.external_request scope. A project authorized before
-    // this feature existed has no such grant, so every verification throws until the
-    // owner runs a function once in the editor and accepts the new permission prompt.
-    if (!httpCode) {
-      // The call never came back at all, so this is not about the credential: the script
-      // could not reach Google's verification service. Missing authorization is the usual
-      // reason, and ?action=selftest settles it in one browser tab.
-      var asOwner = false;
-      try { asOwner = !!Session.getEffectiveUser().getEmail(); } catch (e2) { asOwner = false; }
-      return jsonOut_({
-        ok: false,
-        code: 'verifierUnreachable',
-        error: 'This backend could not run its sign-in verification' +
-               (fetchError ? ' (' + fetchError.slice(0, 140) + ')' : '') +
-               '. Owner fix: ' + (asOwner
-                 ? 'run authorizeNow() in the Apps Script editor, accept the permission prompt, ' +
-                   'then redeploy a New version.'
-                 : 'the deployment is set to run as the visitor, so it has no permissions — open ' +
-                   'Deploy → Manage deployments → ✏️ and set "Execute as: Me", then deploy a New ' +
-                   'version.') +
-               ' Add ?action=selftest to your web-app URL for the full check.'
-      });
-    }
-    return jsonOut_({
-      ok: false,
-      error: 'Google rejected that sign-in credential (verification returned HTTP ' + httpCode +
-             '). It may have expired — reload the page and sign in again.'
-    });
-  }
-
-  var aud = String(payload.aud || '').trim();
-  if (aud !== clientId) {
-    Logger.log('googleLogin rejected — client ID mismatch.\n  token audience : ' + aud +
-               '\n  stored property: ' + clientId +
-               '\n  Fix: run checkGoogleLogin(), then setupGoogleLogin() with the ID shown as "token audience".');
-    return jsonOut_({
-      ok: false,
-      error: 'This backend is set up with a different Google client ID than the app used. ' +
-             'In the Apps Script editor run checkGoogleLogin() — it prints both and how to fix it.'
-    });
-  }
-
-  if (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') {
-    Logger.log('googleLogin rejected — unexpected issuer: ' + payload.iss);
-    return jsonOut_({ ok: false, error: 'That sign-in did not come from Google. Try again.' });
-  }
-
-  if (String(payload.email_verified) !== 'true') {
-    Logger.log('googleLogin rejected — email not verified: ' + payload.email);
-    return jsonOut_({ ok: false, error: 'That Google account’s email address is not verified, so it cannot be used here.' });
-  }
-
-  var email = normalizeEmail_(payload.email);
-  if (!isValidEmail_(email)) {
-    return jsonOut_({ ok: false, error: 'Google returned an unusable email address.' });
-  }
-
-  var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    // Members only (contract v5). A valid single-use invite token whitelists the
-    // signing-in address on the spot; anyone else is turned away by name.
-    if (!isAllowed_(email) && !consumeInvite_(inviteToken, email)) {
-      Logger.log('googleLogin refused: ' + email + ' is not a member' +
-                 (inviteToken ? ' (invite token invalid, used, or expired)' : ''));
-      return jsonOut_({
-        ok: false,
-        code: 'notInvited',
-        error: 'This Google account (' + email + ') is not on the member list. ' +
-               'Ask the app owner for an invite link' +
-               (inviteToken ? ' — the one you used has already been used or has expired.' : '.')
-      });
-    }
-
-    var props = PropertiesService.getScriptProperties();
-    var key = props.getProperty(keyKey_(email));
-    if (!key) {
-      key = generateKey_();
-      props.setProperty(keyKey_(email), key);
-      Logger.log('Sync key created via Google sign-in for ' + email);
-    } else {
-      Logger.log('Google sign-in: existing sync key returned to ' + email);
-    }
-    var sub = readSub_(email);
-    return jsonOut_({
-      ok: true,
-      action: 'googleLogin',
-      email: email,
-      key: key,
-      subscribed: !!sub,
-      languages: (sub && sub.languages) ? sub.languages : []
-    });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/**
- * Same alphabet the app uses (Crockford base32, no I/L/O/U) so keys stay typeable.
- * Entropy comes from Utilities.getUuid() (Java SecureRandom underneath) hashed through
- * SHA-256 — Math.random() is avoided because its xorshift state is recoverable from a
- * handful of observed outputs. 256 % 32 == 0, so the mapping below is unbiased.
- */
-function generateKey_() {
-  var alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
-    Utilities.getUuid() + Utilities.getUuid());
-  var out = '';
-  for (var i = 0; i < 12; i++) {
-    out += alphabet.charAt((digest[i] & 255) % alphabet.length);
-  }
-  return out;
-}
-
-/* ==================================================================
-   MEMBERS + INVITES (contract v5)
-
-   The app is invite-only: googleLogin_ and authorize_ both check the whitelist, so a
-   non-member can neither sign in nor touch any stored data even if they know this URL.
-   The account that owns this script is always a member — you can never lock yourself
-   out. Everyone else gets in through addMember() or a single-use invite link.
-   ================================================================== */
-
-/** True when this address may use the app: the script owner, or a whitelisted member. */
-function isAllowed_(email) {
-  if (!email) return false;
-  if (PropertiesService.getScriptProperties().getProperty(ALLOW_PREFIX + email)) return true;
-  return normalizeEmail_(Session.getEffectiveUser().getEmail()) === email;
-}
-
-/**
- * Redeems a single-use invite token for the given (already Google-verified) address:
- * deletes the token and whitelists the address in one step. Returns false for a missing,
- * already-used, or expired token. Caller holds the script lock, so a token can never be
- * redeemed twice in a race.
- */
-function consumeInvite_(token, email) {
-  var t = String(token == null ? '' : token).trim();
-  if (!t || t.length > 64 || !/^[0-9A-Z]+$/.test(t)) return false;
-
-  var props = PropertiesService.getScriptProperties();
-  var raw = props.getProperty(INVITE_PREFIX + t);
-  if (!raw) return false;
-
-  var rec = null;
-  try { rec = JSON.parse(raw); } catch (err) { rec = null; }
-  props.deleteProperty(INVITE_PREFIX + t);   // single-use, even when expired
-
-  if (rec && rec.createdAt &&
-      (Date.now() - new Date(rec.createdAt).getTime()) > INVITE_TTL_DAYS * 86400000) {
-    Logger.log('Invite expired (unused for over ' + INVITE_TTL_DAYS + ' days): ' + t.slice(0, 4) + '…');
-    return false;
-  }
-
-  props.setProperty(ALLOW_PREFIX + email, JSON.stringify({
-    addedAt: new Date().toISOString(),
-    via: 'invite' + (rec && rec.note ? ':' + rec.note : '')
-  }));
-  Logger.log('Invite redeemed: ' + email + ' is now a member.');
-  return true;
-}
-
-/** 20-char single-use invite token from the same CSPRNG-backed digest as sync keys. */
-function generateToken_() {
-  var alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
-    Utilities.getUuid() + Utilities.getUuid());
-  var out = '';
-  for (var i = 0; i < 20; i++) {
-    out += alphabet.charAt((digest[i] & 255) % alphabet.length);
-  }
-  return out;
-}
-
-/** The invite URL for a token: app address + token + this backend's URL, all in the fragment. */
-function inviteUrl_(token) {
-  var be = SCRIPT_URL || ScriptApp.getService().getUrl() || '';
-  if (be.indexOf('/dev') !== -1 || !/\/exec$/.test(be)) {
-    Logger.log('WARNING: auto-detected backend URL looks wrong (' + be + '). ' +
-               'Paste your real /exec URL into the SCRIPT_URL variable at the top and rerun.');
-  }
-  return APP_URL + '#invite=' + token + '&be=' +
-         Utilities.base64EncodeWebSafe(be).replace(/=+$/, '');
-}
-
-/**
- * RUN THIS to invite someone: prints a single-use link (valid ~30 days) to the execution
- * log. Send it over any channel you like; the first Google account signed in with it
- * becomes a member. The link carries the backend address in the URL fragment, which
- * browsers never transmit to servers, so it stays out of request logs.
- */
-function createInviteLink() {
-  var token = generateToken_();
-  var props = PropertiesService.getScriptProperties();
-  props.setProperty(INVITE_PREFIX + token, JSON.stringify({ createdAt: new Date().toISOString() }));
-  var link = inviteUrl_(token);
-  // Also parked in a property: if the execution log is hard to find, read it in
-  // ⚙ Project Settings → Script Properties → lastInviteLink. Never exposed by any endpoint.
-  props.setProperty('lastInviteLink', link);
-  Logger.log('Single-use invite link (expires in ' + INVITE_TTL_DAYS + ' days if unused):\n\n' + link +
-             '\n\n(Also saved as the "lastInviteLink" script property, in case this log is hard to find.)');
-  return link;
-}
-
-/**
- * RUN THIS to invite someone by email: paste their address into TO, run, and they get a
- * short invitation email with their personal single-use link.
- */
-function emailInvite() {
-  var TO = 'PASTE-THEIR-EMAIL-HERE';
-  if (TO.indexOf('PASTE-') === 0) {
-    throw new Error('Edit emailInvite() first: replace the placeholder with the recipient address, then run again.');
-  }
-  var link = createInviteLink();
-  MailApp.sendEmail({
-    to: TO,
-    subject: 'You’re invited to Word Goblin 🧌',
-    name: SENDER_NAME,
-    htmlBody:
-      '<p>You’ve been invited to <b>Word Goblin</b> — a Korean + Chinese course with the ' +
-      'etymology of every word.</p>' +
-      '<p><a href="' + link + '">Accept the invite and open the app</a> (sign in with the Google ' +
-      'account you want to use — the link works once).</p>' +
-      '<p style="color:#8a8378;font-size:13px;">If the link has expired, ask for a new one.</p>',
-    body: 'You’re invited to Word Goblin.\n\nOpen this link and sign in with Google (it works once):\n' +
-          link + '\n\nIf it has expired, ask for a new one.'
-  });
-  Logger.log('Invite emailed to ' + TO);
-}
-
-/** RUN THIS to whitelist an address directly (no invite link). */
-function addMember() {
-  var EMAIL = 'PASTE-THEIR-EMAIL-HERE';
-  if (EMAIL.indexOf('PASTE-') === 0) {
-    throw new Error('Edit addMember() first: replace the placeholder with the member address, then run again.');
-  }
-  var email = normalizeEmail_(EMAIL);
-  if (!isValidEmail_(email)) throw new Error('"' + EMAIL + '" does not look like an email address.');
-  PropertiesService.getScriptProperties().setProperty(ALLOW_PREFIX + email,
-    JSON.stringify({ addedAt: new Date().toISOString(), via: 'addMember' }));
-  Logger.log(email + ' is now a member.');
-}
-
-/**
- * RUN THIS to remove a member. They can no longer sign in or sync, but their stored
- * data stays until you (or they, while still signed in) run deleteAll for the address.
- */
-function removeMember() {
-  var EMAIL = 'PASTE-THEIR-EMAIL-HERE';
-  if (EMAIL.indexOf('PASTE-') === 0) {
-    throw new Error('Edit removeMember() first: replace the placeholder with the member address, then run again.');
-  }
-  var email = normalizeEmail_(EMAIL);
-  PropertiesService.getScriptProperties().deleteProperty(ALLOW_PREFIX + email);
-  Logger.log(email + ' removed from the member list. Their synced data is untouched — ' +
-             'run deleteAll-style cleanup separately if you want it gone.');
-}
-
-/** Prints the member list and any outstanding (unredeemed) invites. */
-function listMembers() {
-  var props = PropertiesService.getScriptProperties();
-  var keys = props.getKeys().sort();
-  var members = 0, invites = 0;
-
-  Logger.log('Owner (always a member): ' + normalizeEmail_(Session.getEffectiveUser().getEmail()));
-  for (var i = 0; i < keys.length; i++) {
-    if (keys[i].indexOf(ALLOW_PREFIX) === 0) {
-      members++;
-      Logger.log('Member: ' + keys[i].slice(ALLOW_PREFIX.length) + '  ' + (props.getProperty(keys[i]) || ''));
-    } else if (keys[i].indexOf(INVITE_PREFIX) === 0) {
-      invites++;
-      Logger.log('Open invite: ' + keys[i].slice(INVITE_PREFIX.length).slice(0, 4) + '…  ' +
-                 (props.getProperty(keys[i]) || ''));
-    }
-  }
-  Logger.log(members + ' member(s) besides you, ' + invites + ' unredeemed invite(s).');
-}
-
-/* ==================================================================
-   PROGRESS SYNC (cross-device)
-   ================================================================== */
-
-/**
- * Stores the app's whole progress object for this address.
- *
- * A Script Property value cannot exceed 9 KB, so the serialized blob is split into 8 KB
- * chunks written to prog:<email>:0, prog:<email>:1, … with a progmeta:<email> record
- * describing the set. Chunks left over from a previous, larger save are deleted so a
- * shorter blob can never be read back with stale tail data appended.
- *
- * Works whether or not the address is subscribed to the emails — progress sync and the
- * email subscription are independent features.
- */
-function saveProgress_(email, key, updatedAt, progress) {
-  if (progress === null || progress === undefined || typeof progress !== 'object') {
-    return jsonOut_({ ok: false, error: 'saveProgress requires a "progress" object.' });
-  }
-
-  var serialized;
-  try {
-    serialized = JSON.stringify(progress);
-  } catch (err) {
-    return jsonOut_({ ok: false, error: 'progress could not be serialized: ' + err });
-  }
-
-  if (serialized.length > MAX_PROGRESS_BYTES) {
-    return jsonOut_({
-      ok: false,
-      error: 'progress is ' + serialized.length + ' bytes, over the ' +
-             MAX_PROGRESS_BYTES + ' byte limit.'
-    });
-  }
-
-  var stamp = (typeof updatedAt === 'string' && updatedAt) ? updatedAt : new Date().toISOString();
-  var chunkCount = Math.ceil(serialized.length / PROGRESS_CHUNK_BYTES) || 1;
-
-  var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    if (!authorize_(email, key)) return badKey_(email, 'saveProgress');
-
-    var props = PropertiesService.getScriptProperties();
-    var batch = {};
-    for (var i = 0; i < chunkCount; i++) {
-      batch[progKey_(email, i)] = serialized.substr(i * PROGRESS_CHUNK_BYTES, PROGRESS_CHUNK_BYTES);
-    }
-    batch[progmetaKey_(email)] = JSON.stringify({
-      chunks: chunkCount,
-      bytes: serialized.length,
-      updatedAt: stamp
-    });
-    props.setProperties(batch);          // one call, so a partial write is far less likely
-
-    var removed = deleteProgressChunks_(email, chunkCount);   // drop any longer previous blob
-
-    Logger.log('saveProgress ' + email + ': ' + serialized.length + ' bytes in ' + chunkCount +
-               ' chunk(s)' + (removed ? ', ' + removed + ' stale chunk(s) removed' : ''));
-
-    return jsonOut_({
-      ok: true,
-      action: 'saveProgress',
-      email: email,
-      bytes: serialized.length,
-      chunks: chunkCount,
-      updatedAt: stamp
-    });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/**
- * Returns the stored progress object, or progress:null when this address has never saved.
- * Used by both the POST action and the GET fallback path.
- */
-function loadProgress_(email, key) {
-  if (!authorize_(email, key)) return badKey_(email, 'loadProgress');
-
-  var meta = readJsonProperty_(progmetaKey_(email));
-  if (!meta || !meta.chunks) {
-    return jsonOut_({ ok: true, action: 'loadProgress', email: email, progress: null });
-  }
-
-  var props = PropertiesService.getScriptProperties();
-  var parts = [];
-  for (var i = 0; i < meta.chunks; i++) {
-    var part = props.getProperty(progKey_(email, i));
-    if (part === null) {
-      // A missing chunk means the blob cannot be reassembled. Say so rather than returning
-      // null, which the client would read as "nothing saved yet" and could then overwrite.
-      Logger.log('loadProgress ' + email + ': chunk ' + i + ' of ' + meta.chunks + ' missing.');
-      return jsonOut_({
-        ok: false,
-        error: 'Stored progress is incomplete (chunk ' + i + ' of ' + meta.chunks +
-               ' missing). Save again from a device that still has your progress.'
-      });
-    }
-    parts.push(part);
-  }
-
-  var raw = parts.join('');
-  try {
-    return jsonOut_({
-      ok: true,
-      action: 'loadProgress',
-      email: email,
-      progress: JSON.parse(raw),
-      updatedAt: meta.updatedAt || null,
-      bytes: raw.length
-    });
-  } catch (err) {
-    Logger.log('loadProgress ' + email + ': stored blob will not parse: ' + err);
-    return jsonOut_({ ok: false, error: 'Stored progress is corrupt and could not be read.' });
-  }
-}
-
-/**
- * Wipes everything held for this address: subscription, lesson queues, progress chunks,
- * progress metadata and the sync key itself. After this the address is unknown again and
- * the next request presenting a key claims a fresh one.
- */
-function deleteAll_(email, key) {
-  var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    if (!authorize_(email, key)) return badKey_(email, 'deleteAll');
-
-    var props = PropertiesService.getScriptProperties();
-    var hadSub = !!readSub_(email);
-    var hadProgress = !!props.getProperty(progmetaKey_(email));
-
-    props.deleteProperty(subKey_(email));
-    for (var i = 0; i < LANGUAGE_ORDER.length; i++) {
-      props.deleteProperty(queueKey_(email, LANGUAGE_ORDER[i]));
-    }
-    props.deleteProperty(progmetaKey_(email));
-    var chunks = deleteProgressChunks_(email, 0);
-    props.deleteProperty(keyKey_(email));
-
-    Logger.log('deleteAll for ' + email + ': subscription=' + hadSub + ', progress=' + hadProgress +
-               ', ' + chunks + ' chunk(s) removed, sync key cleared.');
-
-    return jsonOut_({
-      ok: true,
-      action: 'deleteAll',
-      email: email,
-      deleted: { subscription: hadSub, progress: hadProgress, chunks: chunks, key: true }
-    });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/**
- * Deletes prog:<email>:<n> properties with n >= fromIndex. Scans the key list rather than
- * trusting the metadata, so orphaned chunks from an interrupted save are cleaned up too.
- * Returns how many were removed.
- */
-function deleteProgressChunks_(email, fromIndex) {
-  var props = PropertiesService.getScriptProperties();
-  var prefix = PROG_PREFIX + email + ':';
-  var keys = props.getKeys();
-  var removed = 0;
-
-  for (var i = 0; i < keys.length; i++) {
-    if (keys[i].indexOf(prefix) !== 0) continue;
-    var index = parseInt(keys[i].slice(prefix.length), 10);
-    if (isNaN(index) || index >= fromIndex) {
-      props.deleteProperty(keys[i]);
-      removed++;
-    }
-  }
-  return removed;
 }
 
 /* ==================================================================
@@ -1595,8 +894,8 @@ function sendTestEmail() {
 }
 
 /**
- * Overview of everything the script stores, per address: subscription, sync key present,
- * saved progress size and age. Key VALUES are not printed here — use showMyKeys for that.
+ * Overview of everything the script stores, per address: subscription, queue state and
+ * whether a sync key is set. Key VALUES are not printed here — use showMyKeys for that.
  */
 function listStoredData() {
   migrateLegacy_();
@@ -1607,7 +906,6 @@ function listStoredData() {
   for (var i = 0; i < emails.length; i++) {
     var email = emails[i];
     var sub = readSub_(email);
-    var meta = readJsonProperty_(progmetaKey_(email));
     var queues = [];
 
     for (var j = 0; j < LANGUAGE_ORDER.length; j++) {
@@ -1619,17 +917,15 @@ function listStoredData() {
       email +
       '\n    subscribed : ' + (sub ? 'yes [' + (sub.languages || []).join(', ') + ']' : 'no') +
       '\n    queues     : ' + (queues.length ? queues.join(', ') : 'none') +
-      '\n    sync key   : ' + (props.getProperty(keyKey_(email)) ? 'set' : 'not set') +
-      '\n    progress   : ' + (meta ? meta.bytes + ' bytes in ' + meta.chunks + ' chunk(s), updated ' +
-                                      meta.updatedAt : 'none')
+      '\n    sync key   : ' + (props.getProperty(keyKey_(email)) ? 'set' : 'not set')
     );
   }
   Logger.log(emails.length + ' address(es) stored.');
 }
 
 /**
- * Prints the sync keys in plain text — this is the intended recovery path when you have
- * forgotten the key you generated on your first device.
+ * Prints the sync keys in plain text — the recovery path if a device ever loses its
+ * automatically generated key.
  *
  * It is safe because only you can run it: the Apps Script editor and its execution log are
  * private to the Google account that owns this project. Do not screen-share the output.
@@ -1645,7 +941,7 @@ function showMyKeys() {
     Logger.log(emails[i] + '  →  ' + key);
     found++;
   }
-  Logger.log(found + ' sync key(s). Type the key exactly as shown into Settings on your other device.');
+  Logger.log(found + ' sync key(s).');
 }
 
 /** Sample content used only by sendTestEmail() when no real queue exists. */
@@ -1679,17 +975,15 @@ function demoItem_(lang) {
 function subKey_(email) { return SUB_PREFIX + email; }
 function queueKey_(email, lang) { return QUEUE_PREFIX + email + ':' + lang; }
 function keyKey_(email) { return KEY_PREFIX + email; }
-function progKey_(email, index) { return PROG_PREFIX + email + ':' + index; }
-function progmetaKey_(email) { return PROGMETA_PREFIX + email; }
 
 /**
- * Every address this script holds anything for — subscribers, sync keys and progress
- * blobs alike. Used by the reporting helpers below.
+ * Every address this script holds anything for — subscribers and sync keys alike.
+ * Used by the reporting helpers above.
  */
 function allKnownEmails_() {
   var keys = PropertiesService.getScriptProperties().getKeys();
   var seen = {};
-  var prefixes = [SUB_PREFIX, KEY_PREFIX, PROGMETA_PREFIX];
+  var prefixes = [SUB_PREFIX, KEY_PREFIX];
 
   for (var i = 0; i < keys.length; i++) {
     for (var j = 0; j < prefixes.length; j++) {

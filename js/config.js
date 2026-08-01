@@ -1,24 +1,28 @@
 /* Word Goblin — js/config.js
  *
- * Public deployment settings. This file ships with the app, so treat everything in it as
- * world-readable — and that is fine by design: knowing the backend address or the OAuth
- * client ID grants nobody access. Sign-in is checked against the member whitelist inside
- * your Apps Script, so a stranger who reads these values still cannot get in, read a
- * single word of anyone's progress, or subscribe an address.
+ * Public deployment settings. This file ships with the app, so everything in it is
+ * world-readable — and that is fine by design:
  *
- * Filling both fields in is what makes "Sign in with Google" appear immediately on the
- * landing page, for everyone, without an invite link or any typing.
+ *   scriptUrl  your Apps Script web-app URL, ending in /exec
+ *              (Deploy → Manage deployments → copy the Web app URL).
+ *              It only powers the optional daily mini-lesson e-mail feature
+ *              (Settings → Daily mini-lesson e-mail); knowing it grants nobody access.
  *
- *   scriptUrl       your Apps Script web-app URL, ending in /exec
- *                   (Deploy → Manage deployments → copy the Web app URL)
- *   googleClientId  the OAuth client ID from console.cloud.google.com → Credentials,
- *                   ending in .apps.googleusercontent.com. Optional: with it the button
- *                   paints instantly; without it the app asks the backend first.
+ *   firebase   the web-app config pasted from the Firebase console — FIREBASE-SETUP.md
+ *              walks through it. None of these values are secrets: they only tell the
+ *              browser which Firebase project to talk to. Access control is enforced
+ *              server-side by the Firestore security rules and the `allowlist`
+ *              collection, so a stranger who reads them still cannot sign in past the
+ *              member check or read a word of anyone's progress.
  *
- * Leave a value as '' if you do not have it yet — invite links still carry the backend
- * address, so the app keeps working either way.
+ * Leave a value as '' if you do not have it yet — the app itself runs fully without them.
  */
 window.WORDGOBLIN_DEFAULTS = {
   scriptUrl: 'https://script.google.com/macros/s/AKfycbxtlGnGmumFnBzyR4G2ql79LHOL1rqMsKcdhd-hWViYWfv4WPjzYWx194iAWIBg8_ELxA/exec',
-  googleClientId: '723840638835-ou9a35tc501rqi8865sq987aqgdqi71a.apps.googleusercontent.com'
+  firebase: {
+    apiKey: '',
+    authDomain: '',
+    projectId: '',
+    appId: ''
+  }
 };

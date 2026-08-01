@@ -9,7 +9,7 @@ click-to-hear audio, saved progress, and a free daily-email reminder backend.
 | Requirement | Decision |
 |---|---|
 | 1. Accessible as HTML | Pure static app: `index.html` + plain-script JS/CSS. **No build step, no modules, no fetch()** — must work opened directly via `file://` (fetch/ES-modules break on file:// CORS). Curriculum ships as `.js` files that register into a `window.CURRICULUM` global via ordinary `<script>` tags. |
-| 2. Save progress | `localStorage` under key `wordGoblin.v1`, plus JSON export/import backup in Settings. |
+| 2. Save progress | `localStorage` under key `wordGoblin.v1`, plus JSON export/import backup in Settings, plus automatic cloud sync to a per-user Firestore document once signed in (see "Sign-in + cloud sync"). |
 | 3. Daily email | **Google Apps Script** (free forever, no server): a deployed web-app endpoint receives the email address from the app's Settings page; a daily time-driven trigger sends the reminder via `MailApp`. Setup is paste-one-file + click Deploy, documented in `EMAIL-SETUP.md`. |
 | 4. Independent languages | Two parallel tracks with separate progress objects, separate dashboards, and a per-language pause toggle. Nothing in one track reads the other. |
 | 5. Real-textbook curriculum | Korean arc follows **Integrated Korean Beginning 1 (KLEAR) / Sogang 1A / Yonsei 1 / TTMIK Level 1**; Chinese arc follows **Integrated Chinese Level 1 Part 1 / HSK Standard Course 1–2 / New Practical Chinese Reader 1**. Shared structural pattern used by all of them: script foundation module → themed units, each = dialogue → vocab list → 3–4 grammar points → culture note → exercises. Each unit cites its textbook basis on screen. |
@@ -30,6 +30,8 @@ fable lingua/
   js/quiz.js                 ← Agent APP   exercise renderers
   js/lesson.js               ← Agent APP   unit/section renderers incl. linguistics reveal
   js/tutor.js                ← post-launch  AI tutor chat bubble (Gemini, user's own key)
+  js/firebase.js             ← Agent APP   FableCloud: Firebase Auth + Firestore sync wrapper
+  js/config.js               ← owner        public deployment config (firebase values, scriptUrl)
   js/app.js                  ← Agent APP   router, dashboard, settings (runs last)
   data/korean/foundation.js  ← Agent KO-A  (Hangul module, order 0)
   data/korean/unit01..04.js  ← Agent KO-A
@@ -37,13 +39,16 @@ fable lingua/
   data/chinese/foundation.js ← Agent ZH-A  (Pinyin & tones + character intro, order 0)
   data/chinese/unit01..04.js ← Agent ZH-A
   data/chinese/unit05..08.js ← Agent ZH-B
-  email/Code.gs              ← Agent MAIL
+  email/Code.gs              ← Agent MAIL   daily mini-lesson email backend (v6, email-only)
   EMAIL-SETUP.md             ← Agent MAIL
+  firestore.rules            ← Agent MAIL   Firestore security rules (real access control)
+  FIREBASE-SETUP.md          ← Agent MAIL   owner's one-time Firebase console walkthrough
   README.md                  ← orchestrator (after integration)
 ```
 
 `index.html` script order: all `data/**` files (defer not needed; plain scripts in body), then
-`audio.js`, `progress.js`, `quiz.js`, `lesson.js`, `tutor.js`, `app.js`.
+`config.js`, `audio.js`, `progress.js`, `quiz.js`, `lesson.js`, `tutor.js`, `firebase.js`,
+`app.js` (firebase.js only needs to precede app.js).
 
 ### AI tutor (js/tutor.js, added post-launch)
 
@@ -51,14 +56,15 @@ A floating chat bubble on every page, backed by the **Google Gemini API called d
 the browser** (the API is CORS-open) — the app stays serverless. Contract points:
 
 - Config lives in its OWN localStorage slot `wordGoblin.tutor.v1` = `{ apiKey, model }`,
-  but is **bridged into exports and v3 cross-device sync** by progress.js: `exportJson()`
+  but is **bridged into exports and cross-device sync** by progress.js: `exportJson()`
   grafts a top-level `tutor` field onto the blob (via `FableTutor.getSync()`, localStorage
   fallback), `mergeCloud()` adopts `cloudRaw.tutor` under the same newest-blob-wins rule as
   settings (routed through `FableTutor.applySync()` so the live UI updates), and
   `importJson()` restores it from backups. Guard: an empty cloud/backup value never blanks
   a locally stored key. `FableTutor.onConfigChange` is set by app.js to `schedulePush` so
-  key/model edits propagate. The key is only ever sent to the user's own Apps Script
-  (inside the progress blob, gated by the sync key) and `generativelanguage.googleapis.com`.
+  key/model edits propagate. The key is only ever sent to the user's own Firestore document
+  (inside the synced blob, readable only by that signed-in user under the rules) and
+  `generativelanguage.googleapis.com`.
 - Endpoint: `POST {API_BASE}{model}:streamGenerateContent?alt=sse` with header
   `x-goog-api-key`; SSE `data:` lines parsed incrementally; non-streaming
   `:generateContent` used only by the Settings "Test key" button. Default model
@@ -72,56 +78,62 @@ the browser** (the API is CORS-open) — the app stays serverless. Contract poin
 - sw.js never intercepts the API call (cross-origin), so offline mode simply reports
   "can't chat offline".
 
-### Google sign-in (contract v4, optional)
+### Sign-in + cloud sync (Firebase Auth + Firestore)
 
-One-click identity on top of the v3 sync key, using Google Identity Services in the browser
-and token verification in the user's own Apps Script:
+Identity and cross-device progress sync run on Firebase; the app stays a static site.
+Owner setup is console-only — FIREBASE-SETUP.md — and membership is managed as documents,
+never code.
 
-- Client (app.js): the Cross-device sync panel `GET`s `<scriptUrl>?action=config`; if it
-  returns a `googleClientId`, the GIS library (`accounts.google.com/gsi/client`) is loaded
-  on demand and `renderButton` draws the official button. The credential callback POSTs
-  `{action:'googleLogin', idToken}` and on success adopts `{email, syncKey, syncEnabled,
-  subscribed?, activeLangs?}` then runs `syncNow()` + re-render. https-only; file:// and
-  un-configured backends fall back to the manual key with an explanatory hint.
-- Server (Code.gs): `googleLogin_` verifies the ID token via
-  `https://oauth2.googleapis.com/tokeninfo` — audience must equal the `googleClientId`
-  script property, issuer must be accounts.google.com, `email_verified` must be true —
-  then returns the stored `key:<email>` (creating a server-generated Crockford key on
-  first login) plus subscription state. Owner enables it by pasting their OAuth client ID
-  into `setupGoogleLogin()` and running it once (EMAIL-SETUP.md has the Cloud Console
-  walkthrough). The client ID is public; all data access still goes through the sync key.
-- Members & invites (contract v5): the backend is invite-only. `allow:<email>` Script
-  Properties form the whitelist (the script owner is always allowed via
-  `Session.getEffectiveUser()`); `googleLogin_` refuses non-members (`code:'notInvited'`)
-  and `authorize_` refuses them for every data action, so knowing the URL grants nothing.
-  Single-use invite tokens (`invite:<token>`, 20-char CSPRNG-backed, 30-day TTL) are
-  minted with `createInviteLink()` / `emailInvite()` and redeemed inside the login lock
-  by `consumeInvite_` (delete token + whitelist the verified email atomically). Invite
-  links are `<APP_URL>#invite=<token>&be=<base64url /exec URL>` — both values ride the
-  URL fragment, which browsers never transmit, so the backend address stays out of
-  server logs; app.js `captureInviteLink()` stashes them (sessionStorage +
-  `settings.scriptUrl`) before routing and sends `inviteToken` with `googleLogin`.
-  Member management: `addMember()` / `removeMember()` / `listMembers()` in the editor.
-- Landing gate (app.js `showLanding`): boot overlays a full-screen sign-in page until
-  `settings.signedInAs` holds a verified Google address (device-local — in
-  `LOCAL_ONLY_SETTINGS` and coerce(), never adopted from the cloud). There is NO skip:
-  the retired `signedInAs:'local'` marker from the earlier build re-gates at boot, and
-  file:// copies are told to open the hosted app (GIS needs https). A device that has
-  signed in once boots straight in, including offline, so the installed PWA still works.
-  Signing in from either the landing or the Settings panel sets `signedInAs` via the
-  shared `completeGoogleLogin()`; "Sign out on this device" (Settings → Account) clears it
-  and reloads. The Google button is never gated behind typing a URL: `js/config.js`
-  (`WORDGOBLIN_DEFAULTS.scriptUrl` + `googleClientId`) is public deployment config, so a
-  seeded client ID paints the button on first frame and `?action=config` only corrects it
-  afterwards (`showButton` is idempotent per ID). With neither configured, the landing
-  falls back to a revealed URL field. Publishing both is safe because the whitelist is
-  server-side. (The earlier passphrase-encrypted URL mechanism and tools/encrypt-url.html
-  were retired when invites landed.)
-  Honest scope note: the gate (like everything client-side on a public static site) is
-  UX-level, not content security — the curriculum is in a public repo. Real access
-  control lives in the backend: every Code.gs data action requires the per-email sync
-  key (`authorize_` refuses keyless requests outright), and the key is only handed out
-  after Google ID-token verification or first-claim.
+- **FableCloud wrapper (js/firebase.js).** All Firebase access goes through one wrapper
+  object, `window.FableCloud`. It loads the **compat SDK, pinned 10.12.2** (firebase-app-compat,
+  firebase-auth-compat, firebase-firestore-compat) — compat, not modular, so the app keeps
+  its no-build plain-script architecture. Stub-friendly: if `window.firebase` is already
+  defined when firebase.js runs (tests, offline shims), it uses that instead of injecting
+  the CDN scripts. Config comes from `WORDGOBLIN_DEFAULTS.firebase` in js/config.js
+  (`apiKey`, `authDomain`, `projectId`, `appId`) — public by design; with no config,
+  FableCloud reports itself unavailable and the app explains the owner setup step.
+- **Sign-in flow.** Firebase Auth, Google provider (`signInWithPopup`, redirect fallback).
+  After auth, the client checks membership by `get`ting `allowlist/<its own lowercased
+  email>`; a non-member is signed out of the app UI and refused by name (the rules refuse
+  their data access regardless — the client check is just the polite message).
+- **Landing gate (app.js `showLanding`).** Unchanged mechanics: boot overlays a
+  full-screen sign-in page until `settings.signedInAs` holds a verified Google address
+  (device-local — in `LOCAL_ONLY_SETTINGS` and coerce(), never adopted from the cloud).
+  There is NO skip. A device that has signed in once boots straight in, including
+  offline, so the installed PWA still works; file:// copies are told to open the hosted
+  app (Firebase Auth needs https). "Sign out on this device" (Settings → Account) clears
+  `signedInAs` and reloads, which re-gates.
+- **Firestore data model.**
+  - `allowlist/{email}` — one doc per member; the doc ID is the member's Google address,
+    LOWERCASE. No fields required (existence = membership). The owner adds/removes these
+    in the Firebase console; clients can only `get` their own entry (no list, no writes).
+  - `users/{uid}` — one doc per member, keyed by Firebase Auth UID:
+    `{ email, blob, updatedAt, pushedAt }` where `blob` is the app's whole export
+    (`exportJson()` output) as ONE JSON string, `updatedAt` is the client's ISO
+    timestamp, and `pushedAt` is a Firestore server timestamp.
+- **Rules summary (firestore.rules, repo root — publish via the console Rules tab).**
+  Helpers: `signedIn()`, `userEmail()` = `request.auth.token.email.lower()`, `isMember()`
+  = `exists(allowlist/<userEmail()>)`, plus an `email_verified` requirement. A user may
+  read/write only `users/<their own uid>`, only while signed in, verified, and
+  allowlisted; writes additionally require `blob` to be a string under 256 KB and
+  `data.email == userEmail()`. `allowlist` allows `get` of your own doc only. Everything
+  else is default-deny.
+- **Sync transport.** Same merge semantics as before: on boot/sign-in the client reads
+  `users/{uid}`, parses `blob`, and runs `P.mergeCloud` (per-item most-progress-wins:
+  union of completed sections, max mastery/exercise tallies, max streak,
+  newest-timestamp settings/tutor); pushes are throttled writes of the full export
+  string after study activity. The blob-as-string design means Firestore never needs to
+  know the app's schema, and the 256 KB rule cap bounds abuse.
+- **Email backend (contract v6, key-only).** The Apps Script backend is now EMAIL-ONLY:
+  subscribe / unsubscribe / sync (lesson queues) / deleteAll, all requiring the
+  client-generated sync key (`authorize_` refuses keyless requests outright; first
+  presented key claims the address). No sign-in, no membership, no progress storage.
+  See EMAIL-SETUP.md for the full v6 contract.
+- **Honest scope note:** the gate (like everything client-side on a public static site)
+  is UX-level, not content security — the curriculum lives in a public repo and anyone
+  can read it there. What the rules actually enforce is DATA access: nobody but a
+  signed-in, verified, allowlisted member can read or write their synced progress, and
+  nobody can read anyone else's.
 
 ## Data contract (curriculum files)
 
@@ -230,19 +242,25 @@ Router (hash-based): `#/` home dashboard (both tracks side by side, pause toggle
 flashcard review of all seen vocab, same for `#/chinese`, `#/settings` (email signup,
 Apps Script URL, export/import, voice test). All units always clickable (requirement 8).
 
-## Email backend contract (Agent MAIL + Agent APP) — v2: daily MINI-LESSON
+## Email backend contract (Agent MAIL + Agent APP) — v6: daily MINI-LESSON, email-only
 
 The daily email is not a bare reminder: it is a personalized mini-lesson ("word of the day"
 per active language) drawn from the learner's actual position in the curriculum. Since the
 Apps Script has neither the curriculum nor the learner's localStorage progress, the app
 uploads a small **lesson queue** and the script consumes one item per day.
 
+Since v6 this backend does NOTHING else: Google sign-in, membership/invites, and progress
+sync all moved to Firebase (see "Sign-in + cloud sync" above). What remains is keyed by the
+app's automatically generated **sync key** (see below).
+
 Requests (app → script, `Content-Type: text/plain;charset=utf-8`, JSON string body — avoids
-CORS preflight; app cannot read replies from file:// so all syncs are fire-and-forget):
-- `{action:"subscribe", email, languages:["korean","chinese"], queues?}`
-- `{action:"unsubscribe", email}`
-- `{action:"sync", email, queues:{korean:[QueueItem…], chinese:[QueueItem…]}}` — full replace,
-  resets that subscriber's pointers to 0.
+CORS preflight; app cannot read replies from file:// so those syncs are fire-and-forget).
+Every request carries the sync `key`:
+- `{action:"subscribe", email, key, languages:["korean","chinese"], queues?}`
+- `{action:"unsubscribe", email, key}`
+- `{action:"sync", email, key, queues:{korean:[QueueItem…], chinese:[QueueItem…]}}` — full
+  replace, resets that subscriber's pointers to 0.
+- `{action:"deleteAll", email, key}` — wipes subscription, queues, and the key itself.
 
 `QueueItem` (client builds; hard cap 10 items/language and ≤8 KB serialized per language —
 Script Properties values max out at 9 KB):
@@ -272,37 +290,20 @@ synced today; after any section completion. Subscribed-state + last-sync stored 
 → paste → Deploy as web app (execute as me, access: anyone) → copy URL into app Settings.
 Documents the v2 request contract above.
 
-### v3 additions: cross-device progress sync + sync key
+### The sync key (lightweight auth for the email endpoint)
 
-The app is also hosted on GitHub Pages (https), where Apps Script POST responses ARE
-readable cross-origin — so progress sync is request/response, unlike the fire-and-forget
-queue sync (which keeps its no-cors fallback for file:// use).
+The endpoint is public, so an email address alone must not grant any action. The app
+generates a random key (10+ chars, crypto.getRandomValues) automatically and persists it in
+settings; the user never sees or types it. Server stores `key:<email>`, claimed by the
+FIRST request that presents a key for that email. Rules (hardened): a request presenting
+NO key is refused outright; once a key is stored, every action must present the exact
+matching `key`; mismatch → `{ok:false, error:"bad key"}` with no side effects; an existing
+key is never overwritten, and only `deleteAll` clears it.
 
-**Sync key (lightweight auth).** The endpoint is public, so email alone must not grant
-read/write. The app generates a random key (10+ chars, crypto.getRandomValues) on first
-use and persists it in settings; the user types the same key on their other devices.
-Server stores `key:<email>` → token, claimed by the FIRST request that presents a key for
-that email. Once set, every action below — and `sync`/`unsubscribe` from v2 — must present
-the matching `key`; mismatch → `{ok:false, error:"bad key"}` (subscribe with a mismatched
-key also fails; never overwrite an existing key). Progress sync works WITHOUT an email
-subscription — key and subscription are independent.
-
-**New actions** (same text/plain JSON POST):
-- `{action:"saveProgress", email, key, updatedAt, progress:<app state object>}` — store blob.
-  Chunk across Script Properties `prog:<email>:<n>` (8 KB chunks) with `progmeta:<email>` →
-  `{chunks, bytes, updatedAt}`; reject blobs > 100 KB. LockService-guarded.
-- `{action:"loadProgress", email, key}` → `{ok:true, progress, updatedAt}` or
-  `{ok:true, progress:null}` if none. Also expose GET
-  `?action=loadProgress&email=…&key=…` as a fallback path.
-- Unsubscribe keeps stored progress (email opt-out ≠ delete my data);
-  `{action:"deleteAll", email, key}` wipes sub, queues, progress, and key.
-
-**Client (Agent APP):** on boot (when scriptUrl+email+key configured): loadProgress →
-merge with local → save merged locally; push saveProgress after study activity (throttled,
-e.g. ≤1/5 min, and on pagehide via sendBeacon-style best effort). Merge = per-item most
-progress wins: union of completed sections, max per-word mastery counts and exercise
-tallies, max streak, latest-timestamp settings. Settings UI: sync key field (generate /
-show / copy), sync status line, "Sync now" button, and a short explainer.
+Progress storage is NOT part of this backend anymore (v6): cross-device progress sync is a
+Firestore document per user — see "Sign-in + cloud sync (Firebase Auth + Firestore)" above.
+The full v6 request/response contract, caps, storage shape and status endpoint are
+documented in EMAIL-SETUP.md ("For developers").
 
 ## PWA / hosting (Agent APP)
 

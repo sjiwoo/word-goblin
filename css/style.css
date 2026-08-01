@@ -1156,15 +1156,9 @@ input, textarea, button, select { font: inherit; color: inherit; }
   .tutor-dots { animation: none; }
 }
 
-/* ---- Google sign-in block (Settings → Cross-device sync) ---- */
-.gsi-box { margin: 4px 0 14px; }
-.gsi-btn { min-height: 44px; display: flex; }
-.gsi-note { margin-top: 6px; }
-
 /* =========================================================== landing gate ==
-   Full-screen sign-in cover shown until this device has signed in with Google
-   (or explicitly skipped where sign-in cannot work). Same paper-and-ink world
-   as the app; the red name-seal mark is the signature. */
+   Full-screen sign-in cover shown until this device has signed in with Google.
+   Same paper-and-ink world as the app; the red name-seal mark is the signature. */
 
 .landing {
   position: fixed; inset: 0; z-index: 80;
@@ -1204,10 +1198,13 @@ input, textarea, button, select { font: inherit; color: inherit; }
   background: var(--card); border: 1px solid var(--rule);
   border-radius: var(--r-lg); box-shadow: var(--shadow-2);
 }
-.landing-gsi { display: flex; justify-content: center; }
-.landing-gsi:not(:empty) { min-height: 44px; margin-bottom: .5rem; }
+.landing-google {
+  display: block;
+  margin: .4rem auto .9rem;
+  padding: .7rem 1.6rem;
+  font-size: 1.02rem;
+}
 .landing-note { text-align: center; margin-bottom: .4rem; }
-.landing-url { margin-top: 1.1rem; }
 .landing-hero { animation: landingIn 480ms cubic-bezier(.22,.61,.36,1) both; }
 .landing-card { animation: landingIn 480ms 90ms cubic-bezier(.22,.61,.36,1) both; }
 @keyframes landingIn {
@@ -1224,5 +1221,3 @@ input, textarea, button, select { font: inherit; color: inherit; }
   padding: 8px 12px; border: 1px dashed var(--rule-2); border-radius: var(--r);
 }
 .signed-as { font-size: .88rem; color: var(--ink-2); }
-
-.landing-reveal { display: block; margin: .2rem auto .6rem; }

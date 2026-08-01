@@ -1,12 +1,8 @@
-# Word Goblin — Daily Mini-Lesson Emails & Cross-Device Sync (setup guide)
+# Word Goblin — Daily Mini-Lesson Emails (setup guide)
 
 Word Goblin can email you a personalized **mini-lesson** every morning: one word of the day
 per language you are studying, with its romanization, an example sentence, and the etymology
 behind it — drawn from wherever you actually are in the curriculum.
-
-The same setup also gives you **cross-device sync**: study on your laptop, pick up on your
-phone with your progress intact. You can use either feature on its own — sync works whether
-or not you subscribe to the emails.
 
 There is no server and no subscription: it runs on **your own free Google account** using
 Google Apps Script.
@@ -14,12 +10,17 @@ Google Apps Script.
 You do not need to know how to code. The whole thing is: paste one file, click Deploy, copy a
 link into the app. Budget about **ten minutes**, once.
 
+> **Sign-in and cross-device sync are NOT set up here.** App sign-in, membership, and
+> progress sync are handled by Firebase — see **[FIREBASE-SETUP.md](FIREBASE-SETUP.md)**.
+> This script does one thing: send the daily email. Subscribing from the app's Settings
+> page still works with an automatic sync key the app generates for you — there is nothing
+> to type or remember.
+
 **How it works, briefly.** The Apps Script cannot see the curriculum or your saved progress —
 those live in your browser. So the app uploads a small **lesson queue** (the next handful of
 words for each language) whenever you study, and the script emails one word per language per
 day, advancing through the queue. Until the app has synced a queue, the daily email is simply
-a friendly reminder to open the app. The app also uploads a copy of your progress, protected
-by a **sync key**, which is what lets a second device pick it up.
+a friendly reminder to open the app.
 
 **What you need**
 
@@ -109,7 +110,7 @@ uploads your lesson queue.
     Click **Copy**, then **Done**.
 
 > **Sanity check:** paste that URL straight into a new browser tab. You should see a line of
-> JSON like `{"ok":true,"service":"Word Goblin email reminders","contract":"v2 (mini-lesson)","status":"running", ...}`.
+> JSON like `{"ok":true,"service":"Word Goblin email reminders","contract":"v6 (mini-lesson email only)","status":"running", ...}`.
 > If you see that, the deployment works. If you see a Google sign-in page or an error page,
 > jump to [Troubleshooting](#troubleshooting).
 
@@ -123,17 +124,15 @@ uploads your lesson queue.
     same account that sends them).
 23. Tick the language(s) you want lessons for — Korean, Chinese, or both.
 24. Click **Subscribe**. The app immediately uploads your first lesson queue along with the
-    signup, so tomorrow's email already has real content in it.
+    signup, so tomorrow's email already has real content in it. (Behind the scenes the app
+    also generates and remembers a random **sync key** that protects your subscription —
+    see [About the sync key](#about-the-sync-key).)
 25. To verify end-to-end without waiting until tomorrow morning, go back to the Apps Script
     editor, pick **`sendDailyReminders`** in the function dropdown and click **▶ Run**.
     A mini-lesson should land in your inbox within a minute. (Check spam the first time.)
 
     Prefer a preview that does *not* consume a word from your queue? Run **`sendTestEmail`**
     instead — it sends a sample lesson to yourself and leaves your place in the queue alone.
-
-> Only want cross-device sync, not the emails? You can skip the Subscribe button entirely —
-> just fill in the Apps Script URL, your email and a sync key, and go straight to
-> [Studying on more than one device](#studying-on-more-than-one-device-the-sync-key).
 
 **About the queue.** You do not manage it; the app does. It re-uploads the next words in
 curriculum order when you subscribe, when you open the app, and after you finish a section —
@@ -142,174 +141,30 @@ and the daily email politely turns back into "open Word Goblin to refresh your l
 Open the app once and it refills.
 
 To stop the emails: **Settings → Unsubscribe**. That deletes your address and your stored
-lesson queues immediately. Your synced progress is deliberately kept — opting out of the
-emails is not the same as deleting your data. To erase everything the script holds for you,
-use **Settings → Delete synced data** (or run `deleteAll` yourself, see the developer section).
+lesson queues immediately. To erase everything the script holds for you (including the sync
+key), use **Settings → Delete synced data** (the `deleteAll` action).
 
 ---
 
-## Studying on more than one device (the sync key)
+## About the sync key
 
-The web-app URL is public — anyone who had it could otherwise guess an email address and read
-or overwrite that person's progress. So each address is protected by a **sync key**: a short
-random password the app generates for you.
-
-**On your first device**
-
-1. In **Settings**, next to **Sync key**, click **Generate**. The app creates a random key and
-   saves it locally.
-2. That is it. From then on the app uploads your progress automatically as you study.
-
-**On your second device**
-
-3. Open Word Goblin there, paste the same **Apps Script URL** into Settings.
-4. Enter the **same email address** and type the **same sync key** — exactly, including case.
-   Use **Show**/**Copy** on the first device to read it off accurately.
-5. Click **Sync now**. Your progress downloads and merges with whatever is on that device
-   (the further-along value wins for each unit, word and streak, so nothing is lost).
-
-**Things worth knowing**
+The web-app URL is public — anyone who had it could otherwise subscribe or unsubscribe any
+email address. So each address is protected by a **sync key**: a short random password the
+app generates and stores for you automatically. You normally never see it or type it.
 
 - The key is claimed by the **first** request that presents one for your email address. After
   that, requests with the wrong key are refused with `bad key` and change nothing.
-- The key is **not a Google password** and grants nothing beyond this one script. Treat it like
-  a shared-notes password.
-- **If you forget it**, you can read it back — you own the script. In the Apps Script editor,
-  select **`showMyKeys`** in the function dropdown, click **▶ Run**, and open the
-  **Execution log**: it prints each email address and its key. Only you can do this; the editor
-  and its logs are private to the Google account that owns the project. Type the key it shows
-  into Settings on the other device.
+- The key is **not a Google password** and grants nothing beyond this one script.
+- If a device ever loses its key (cleared browser storage), the owner can read it back: in
+  the Apps Script editor, select **`showMyKeys`** in the function dropdown, click **▶ Run**,
+  and read the **Execution log**. Only you can do this; the editor and its logs are private
+  to the Google account that owns the project.
 - To start over with a fresh key, use **Settings → Delete synced data** (the `deleteAll`
-  action), which clears the stored key along with everything else. The next device to present
-  a key claims it.
-- Prefer not to sync at all? Leave the sync key blank. The daily emails work without it.
+  action), which clears the stored key along with the subscription. The next device to
+  present a key claims it.
 
----
-
-## One-click Google sign-in (optional)
-
-Instead of typing your email and sync key on every device, you can add a **Sign in with
-Google** button to the app's sync panel: one click proves you own the address, fetches your
-sync key from the script (creating one on first login), and syncs everything. Setup is a
-one-time ten minutes:
-
-**A. Create an OAuth client ID** (free, in any Google Cloud project)
-
-1. Go to **console.cloud.google.com** → create a project if you have none (name it anything).
-2. **APIs & Services → OAuth consent screen**: choose **External**, fill in just the app name
-   ("Word Goblin") and your email, save through the steps. You can leave it in *Testing* and
-   add yourself under **Test users** — that is enough for personal use.
-3. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
-   Application type **Web application**.
-4. Under **Authorized JavaScript origins** add the origin you open the app from:
-   `https://sjiwoo.github.io` (no path). Add `http://localhost:8123` too if you ever test
-   locally.
-5. Create, and copy the **Client ID** (ends in `.apps.googleusercontent.com`).
-
-**B. Tell your script about it**
-
-6. In the Apps Script editor, open `Code.gs`, find **`setupGoogleLogin`**, paste your client
-   ID over the placeholder string, select `setupGoogleLogin` in the function dropdown, and
-   click **▶ Run** once.
-7. If you edited the code (updating to a newer Code.gs), redeploy: **Deploy → Manage
-   deployments → ✏️ → New version → Deploy** (the URL stays the same).
-
-That's it. Open the app's **Settings → Cross-device sync** on any device: with the Apps
-Script URL filled in, the Google button appears there automatically. The button needs the
-hosted (https) app; the manual sync key keeps working everywhere, with or without this.
-
-How it works (developer contract v5): the app posts
-`{"action":"googleLogin","idToken":"<Google ID token>","inviteToken":"<optional>"}`; the
-script verifies the token against `https://oauth2.googleapis.com/tokeninfo` (audience must
-equal the stored `googleClientId` script property, issuer must be Google, email must be
-verified), checks the member whitelist (redeeming a valid invite token on the spot), and
-replies `{"ok":true,"email":…,"key":…,"subscribed":…,"languages":[…]}` — or
-`{"ok":false,"code":"notInvited",…}` for accounts that are not members. `GET ?action=config`
-returns `{"ok":true,"googleClientId":…}` so the app knows whether to show the button. The
-client ID is public by design; membership plus the sync key gate all data access.
-
----
-
-### If sign-in says "could not be verified"
-
-**First, reload the app with a hard refresh** (Ctrl+Shift+R / Cmd+Shift+R) and try again. A
-page that loaded before you last changed the backend's client ID keeps using the old one,
-and every token it mints is then rejected. This is the most common cause by far.
-
-**If the message mentions the backend could not run its verification** (no HTTP code in it),
-the script is not authorized to make external requests — it cannot call Google's tokeninfo
-service, so no sign-in can ever succeed. Confirm and fix in two steps:
-
-1. Open **`<your /exec URL>?action=selftest`**. `externalRequests: "working"` (with
-   `tokeninfoHttp: 400`, the healthy answer for a dummy token) means this is not your
-   problem; `"BLOCKED"` names it outright and prints the underlying error.
-
-   Read **`executesAsOwner`** first. If it is `false`, the deployment is set to **Execute
-   as: User accessing the web app**, so anonymous visitors run with no permissions at all
-   and `UrlFetchApp` is refused no matter what you authorize. That is a deployment setting,
-   not a missing grant: **Deploy → Manage deployments → ✏️ → Execute as: Me** (keep *Who has
-   access: Anyone*) **→ New version → Deploy**. The giveaway is that the editor never shows
-   an authorization dialog, because your own account already granted everything.
-2. To grant it: in the Apps Script editor run **`authorizeNow()`** — it touches every
-   service this script needs, which is what makes the authorization dialog appear. Accept
-   it, including **Advanced → "Go to Word Goblin (unsafe)"**, Google's standard wording for
-   your own unverified script. Then **Deploy → Manage deployments → ✏️ → New version →
-   Deploy**. `authorizeNow()` prints a per-service OK/FAILED list and also saves it to the
-   `lastAuthCheck` script property, so you can read the result without hunting for the log.
-
-   **If no dialog ever appears** and it still fails, your project pins its OAuth scopes, so
-   Apps Script will not add the missing one by itself. Fix it once: **Project Settings (⚙)
-   → tick "Show appsscript.json manifest file in editor"**, open `appsscript.json`, and copy
-   the `oauthScopes` array from `email/appsscript.json` in this repo into it (keep your own
-   `timeZone`). Save, run `authorizeNow()` again, accept the prompt, redeploy.
-
-   Beware pop-up blockers here: if the run finishes instantly with no dialog and no log
-   output, the consent window was probably blocked. Allow pop-ups for script.google.com and
-   run it again.
-
-If it still fails, **open `<your /exec URL>?action=diag` in a browser tab** — a plain JSON
-self-check that needs no editor and no execution log:
-
-- `codeVersion` — if this is not the value of `CODE_VERSION` at the top of your `Code.gs`,
-  the deployment is still serving **older code**. Save the file, then
-  **Deploy → Manage deployments → ✏️ → New version → Deploy**.
-- `googleClientId` — what this backend expects. It must match the client ID in
-  console.cloud.google.com → Credentials. If it doesn't, fix it with `setupGoogleLogin()`.
-- `clientIdLooksValid` — `false` means the value isn't a client ID at all (pasting the
-  client *secret* is the usual mix-up).
-- `problems` — a plain-English list of anything detected.
-
-Only if those all look right do you need the editor: run **`checkGoogleLogin()`**, sign in
-once more, and read the **Execution log** — a mismatch prints the token's audience next to
-the stored value. An HTTP code there instead means the credential expired; sign in again.
-
-**Can't find the execution log?** In the editor it slides up from the bottom after a run;
-if it's closed, use the ⏱ **Executions** icon in the left sidebar and click the newest row
-to expand it. `createInviteLink()` also saves its link as the `lastInviteLink` script
-property (⚙ **Project Settings → Script Properties**), so you can read it without the log.
-
-## Members & invites
-
-The app is **invite-only**: only Google accounts on the script's whitelist can sign in or
-touch any stored data. Your own account (the one that owns the script) is always a member —
-you can never lock yourself out. Everything below runs from the Apps Script editor
-(select the function in the dropdown, press **▶ Run**, read the **Execution log**):
-
-- **`createInviteLink()`** — prints a single-use invite link, valid 30 days. Send it to a
-  friend any way you like; the first Google account they sign in with becomes a member.
-  The link carries your backend address in the URL *fragment* (`#…`), which browsers never
-  send to any server — so it stays out of logs. **Tip:** run it once for yourself too and
-  keep the link — it's the easiest way to set up your own new devices.
-- **`emailInvite()`** — same, but emails the link for you: edit the `TO` address at the top
-  of the function first, then run.
-- **`addMember()` / `removeMember()`** — whitelist or un-whitelist an address directly
-  (edit the `EMAIL` placeholder, run). Removing a member blocks future sign-ins and syncs;
-  their already-stored data stays until deleted.
-- **`listMembers()`** — prints current members and unredeemed invites.
-
-If the link `createInviteLink()` prints ever looks wrong (contains `/dev` instead of
-`/exec`), paste your real web-app URL into the `SCRIPT_URL` variable at the top of Code.gs
-and run it again.
+Note this key has nothing to do with app sign-in or progress sync — those are Firebase
+(see [FIREBASE-SETUP.md](FIREBASE-SETUP.md)). It only guards the email subscription.
 
 ---
 
@@ -380,10 +235,8 @@ could have 100 people on the list. The script handles the limit gracefully:
 
 Other limits worth knowing: total script runtime is capped at 6 minutes per execution (a run
 of 100 emails takes a few seconds); each Script Property value maxes out at 9 KB, which is why
-lesson queues are stored one property per language (10 words / 8 KB each) and why a synced
-progress blob is split into 8 KB chunks; a single progress blob is capped at 100 KB; and the
-whole property store holds 500 KB in total, so a personal deployment syncing one or two
-devices has room to spare. Progress sync uses no email quota at all — it is pure storage.
+lesson queues are stored one property per language (10 words / 8 KB each); and the whole
+property store holds 500 KB in total, so a personal deployment has room to spare.
 
 ---
 
@@ -404,54 +257,43 @@ devices has room to spare. Progress sync uses no email quota at all — it is pu
 | Two emails every day | Two triggers exist (rare — usually from manual creation) | Run `setupTrigger` once; it deletes every existing `sendDailyReminders` trigger before creating one. |
 | You changed `REMINDER_HOUR` but nothing changed | The trigger still holds the old hour | Re-run `setupTrigger`. |
 | You edited the code and the app's behaviour did not change | Web apps serve the last *deployed* version | **Deploy → Manage deployments → ✏️ edit → Version: New version → Deploy.** The URL stays the same. |
-| Second device says **"bad key"** | The key does not match the one already claimed for that email — nearly always a typo, a missing character, or wrong capitalisation | Run **`showMyKeys`** in the editor, read the exact key from the Execution log, and retype it. Check the email address matches too — the key is per address. |
-| Second device says "bad key" and you never set a key | Someone (or an old device of yours) already claimed a key for that address | Run **`showMyKeys`** to see it. To reset, use **Settings → Delete synced data** on the device that *does* work, or run the `deleteAll` action; the next device to present a key claims a fresh one. |
-| Progress is not syncing between devices | Apps Script URL, email or sync key missing on one device | All three must be filled in on **both** devices, with the same email and key. Press **Sync now** and check the sync status line. Loading `…/exec` in a browser should show `progressBlobs: 1` or more once a save has landed. |
-| Progress syncs but one device looks behind | The two devices merge on load; a device only pulls when it starts or when you press Sync now | Press **Sync now** on the device that looks behind. Nothing is overwritten — the merge keeps the further-along value for each item. |
-| "Stored progress is incomplete" | A save was interrupted part-way | Press **Sync now** on the device that still has your progress locally; a fresh save replaces the damaged one. |
+| Subscribe/Unsubscribe is refused with **"bad key"** | The device's stored key does not match the one already claimed for that email — usually a device whose browser storage was cleared, or an old device claimed the key first | Run **`showMyKeys`** in the editor to see the stored key, or use **Settings → Delete synced data** (the `deleteAll` action) to clear it; the next request claims a fresh key. |
 | Not sure whether anyone is subscribed, or what is queued | — | Run **`listSubscribers`** in the editor and read the Execution log: it prints each address, its languages, and how many words are left in each queue. |
-| Want a full picture of what the script has stored | — | Run **`listStoredData`** — per address it prints subscription, queue counts, whether a sync key is set, and the size and age of the saved progress. |
-| Forgot your sync key | — | Run **`showMyKeys`** — it prints each address and its key in the Execution log. |
+| Want a full picture of what the script has stored | — | Run **`listStoredData`** — per address it prints subscription, queue counts, and whether a sync key is set. |
 | Want to see the email design without waiting or using up a word | — | Run **`sendTestEmail`** — it sends one sample mini-lesson to yourself and does not advance any pointer. |
 
 ---
 
-## For developers: the request/response contract (v3)
+## For developers: the request/response contract (v6, email-only)
 
 The app talks to the backend with a single POST endpoint. Any server that honours this
-contract can replace `Code.gs` — the app only stores a URL.
+contract can replace `Code.gs` — the app only stores a URL. (Earlier contract versions also
+carried Google sign-in, membership, and progress-sync actions; those moved to Firebase Auth +
+Firestore in v6 and are gone from this endpoint.)
 
 **Transport.** `POST <webAppUrl>` with `Content-Type: text/plain;charset=utf-8` and a JSON
 string as the body. The `text/plain` type is deliberate: it keeps the request a CORS "simple
 request", so the browser does not send a preflight `OPTIONS` — which Apps Script cannot
-answer. From the hosted https build the response *is* readable cross-origin, so progress sync
-is a normal request/response; from a `file://` page it is not, so the queue and subscription
-calls are fire-and-forget there. A replacement backend must accept a JSON body under a
-`text/plain` content type and, if it enforces CORS, return `Access-Control-Allow-Origin: *`.
+answer. From the hosted https build the response *is* readable cross-origin; from a `file://`
+page it is not, so calls are fire-and-forget there. A replacement backend must accept a JSON
+body under a `text/plain` content type and, if it enforces CORS, return
+`Access-Control-Allow-Origin: *`.
 
 ### Sync key semantics
 
-The endpoint is public, so the email address alone must not grant read or write access. Every
-address may have one key, stored at `key:<email>`.
+The endpoint is public, so the email address alone must not grant any action. Every address
+may have one key, stored at `key:<email>`. The app generates the key client-side
+(10+ characters from `crypto.getRandomValues`) and always sends it.
 
+- **A request presenting no key is refused, always.** Anonymous requests can do nothing.
 - The key is **claimed by the first request that presents one** for that address. An existing
   key is never overwritten.
-- Once a key exists, **every** action for that address — `subscribe`, `unsubscribe`, `sync`,
-  `saveProgress`, `loadProgress`, `deleteAll` — must present the matching `key`. A mismatch
-  (or a missing key) returns `{"ok":false,"error":"bad key"}` and has **no side effects**.
-- If no key has ever been claimed and none is presented, the request is allowed and nothing is
-  claimed. That keeps email-only, pre-v3 clients working.
+- Once a key exists, every action for that address must present the exact matching `key`. A
+  mismatch returns `{"ok":false,"error":"bad key"}` and has **no side effects**.
 - `deleteAll` clears the key along with the data, so the address can be claimed again.
-- Keys and subscriptions are independent: `saveProgress` / `loadProgress` work for an address
-  that has never subscribed. (`sync` is the one exception — a lesson queue is only meaningful
-  for a subscriber, so it still requires an active subscription.)
-- The key is compared as an exact string, trimmed and capped at 128 characters. The client
-  generates 10+ characters from `crypto.getRandomValues`.
+- The key is compared as an exact string, trimmed and capped at 128 characters.
 
 ### Requests
-
-`key` is optional only until one has been claimed for the address; after that it is required
-on all six actions.
 
 ```jsonc
 // 1. Subscribe. `queues` is optional — the app sends the first queue with the signup.
@@ -461,8 +303,7 @@ on all six actions.
   "languages": ["korean", "chinese"],
   "queues": { "korean": [ /* QueueItem… */ ], "chinese": [ /* QueueItem… */ ] } }
 
-// 2. Unsubscribe. Deletes the sub record AND both queue records.
-//    Progress and the sync key are KEPT — opting out of email is not deleting data.
+// 2. Unsubscribe. Deletes the sub record AND both queue records; the key is kept.
 { "action": "unsubscribe", "email": "you@example.com", "key": "8fK2pQ7xLm" }
 
 // 3. Sync — full replace of the listed languages' queues, pointers reset to 0.
@@ -473,29 +314,11 @@ on all six actions.
   "key": "8fK2pQ7xLm",
   "queues": { "korean": [ /* QueueItem… */ ] } }
 
-// 4. Save progress. `progress` is the app's whole state object; `updatedAt` is an ISO
-//    string (the server substitutes its own clock if it is missing).
-//    Does NOT require a subscription.
-{ "action": "saveProgress",
-  "email": "you@example.com",
-  "key": "8fK2pQ7xLm",
-  "updatedAt": "2026-07-31T15:04:05.000Z",
-  "progress": { /* app state */ } }
-
-// 5. Load progress. Does NOT require a subscription.
-{ "action": "loadProgress", "email": "you@example.com", "key": "8fK2pQ7xLm" }
-
-// 6. Delete everything held for this address: subscription, queues, progress AND the key.
+// 4. Delete everything held for this address: subscription, queues AND the key.
 { "action": "deleteAll", "email": "you@example.com", "key": "8fK2pQ7xLm" }
 ```
 
-`loadProgress` is also reachable over GET as a fallback for clients that cannot POST:
-
-```
-GET <webAppUrl>?action=loadProgress&email=you%40example.com&key=8fK2pQ7xLm
-```
-
-A bare `GET <webAppUrl>` with no `action` parameter still returns the status JSON below.
+A bare `GET <webAppUrl>` with no parameters returns the status JSON below.
 
 `languages` accepts `"korean"`, `"chinese"`, or both; unknown values are dropped, and a
 subscribe with no valid language is rejected. Emails are lower-cased and trimmed before
@@ -547,37 +370,12 @@ Script cannot set arbitrary status codes).
 
 { "ok": true,  "action": "unsubscribe", "email": "you@example.com", "wasSubscribed": true }
 
-{ "ok": true,  "action": "saveProgress", "email": "you@example.com",
-  "bytes": 18442, "chunks": 3, "updatedAt": "2026-07-31T15:04:05.000Z" }
-
-{ "ok": true,  "action": "loadProgress", "email": "you@example.com",
-  "progress": { /* app state */ }, "updatedAt": "2026-07-31T15:04:05.000Z", "bytes": 18442 }
-{ "ok": true,  "action": "loadProgress", "email": "you@example.com", "progress": null }
-
 { "ok": true,  "action": "deleteAll", "email": "you@example.com",
-  "deleted": { "subscription": true, "progress": true, "chunks": 3, "key": true } }
+  "deleted": { "subscription": true, "key": true } }
 
 { "ok": false, "error": "bad key" }
 { "ok": false, "error": "That does not look like a valid email address." }
 ```
-
-`progress: null` means "nothing has ever been saved for this address" — a client may safely
-treat it as a first sync. Anything else that goes wrong (an incomplete or corrupt blob) comes
-back as `ok:false` precisely so a client never mistakes a read failure for an empty account
-and overwrites good data.
-
-### Progress blob storage
-
-`saveProgress` serializes `progress`, rejects it outright above **100 KB**, then splits it
-into **8 KB chunks** written to `prog:<email>:0`, `prog:<email>:1`, … with a `progmeta:<email>`
-record describing the set. Chunks left over from a previous, larger save are deleted in the
-same operation, so a shorter blob can never be read back with stale tail data appended. The
-whole thing runs under `LockService`, and the chunks plus metadata are written in a single
-`setProperties` call.
-
-Chunking exists because one Script Property value cannot exceed 9 KB. A replacement backend
-with real storage can ignore all of this and keep the blob whole — only the request and
-response shapes are part of the contract.
 
 ### Status endpoint
 
@@ -588,11 +386,10 @@ never addresses or lesson content:
 {
   "ok": true,
   "service": "Word Goblin email reminders",
-  "contract": "v3 (mini-lesson + progress sync)",
+  "contract": "v6 (mini-lesson email only)",
   "status": "running",
   "subscribers": 1,
   "queues": { "stored": 2, "korean": 1, "chinese": 1, "itemsPending": 14 },
-  "progressBlobs": 1,
   "syncKeys": 1,
   "reminderHour": 8,
   "timezone": "America/Los_Angeles",
@@ -614,12 +411,6 @@ Script Properties, one property per record so nothing approaches the 9 KB per-va
 
 // key:you@example.com          (plain string, not JSON)
 "8fK2pQ7xLm"
-
-// progmeta:you@example.com
-{ "chunks": 3, "bytes": 18442, "updatedAt": "2026-07-31T15:04:05.000Z" }
-
-// prog:you@example.com:0 … prog:you@example.com:2   (plain string slices of the JSON blob)
-"{\"korean\":{\"units\":{…"
 ```
 
 A v1 deployment's single `subscribers` blob is migrated to this layout automatically on the
@@ -636,3 +427,13 @@ gets a fallback block asking the learner to open the app. The pointer for a lang
 only after its message has been sent successfully. Every message is inline-styled responsive
 HTML with a plain-text alternative, and writes are guarded by `LockService` to avoid lost
 updates from concurrent syncs.
+
+### Note for owners upgrading from an earlier deployment
+
+Your live deployment keeps serving the version you last deployed — the old code keeps
+sending the daily email fine, including any legacy sign-in/progress endpoints it carried
+(the app simply no longer calls them). Pasting this v6 file and deploying a **New version**
+is a cleanup, not an emergency: it removes the retired actions from the public endpoint.
+Any leftover `prog:` / `progmeta:` / `allow:` / `invite:` Script Properties from the old
+version are inert; delete them in ⚙ Project Settings → Script Properties if you want a tidy
+store.

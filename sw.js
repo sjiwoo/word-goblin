@@ -14,7 +14,7 @@
  *
  * Bump CACHE on every deploy to roll clients onto the new build.
  */
-const CACHE = 'word-goblin-v15';
+const CACHE = 'word-goblin-v16';
 
 const PRECACHE = [
   './',
@@ -23,6 +23,7 @@ const PRECACHE = [
   './css/style.css',
 
   './js/config.js',
+  './js/firebase.js',
   './js/audio.js',
   './js/progress.js',
   './js/quiz.js',

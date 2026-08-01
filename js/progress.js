@@ -71,10 +71,10 @@ window.FableProgress = (function () {
         subscribed: false,
         lastSyncAt: null,        // ISO string — last mini-lesson queue upload
         signedInAs: '',          // landing-gate pass: verified Google email ('local' is retired — re-gates)
-        syncKey: '',             // cross-device progress sync key (v3)
+        syncKey: '',             // guards the email-queue backend (auto-generated, invisible)
         syncEnabled: false,
-        lastPushAt: null,        // ISO string — last saveProgress
-        lastPullAt: null         // ISO string — last successful loadProgress
+        lastPushAt: null,        // ISO string — last cloud push (Firestore)
+        lastPullAt: null         // ISO string — last successful cloud pull (Firestore)
       }
     };
   }

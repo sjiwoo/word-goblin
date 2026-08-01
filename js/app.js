@@ -8,8 +8,9 @@
  * Also owns the v2 daily-mini-lesson client duty: it builds a per-language "lesson queue" of
  * the learner's next unseen / low-mastery words and uploads it (fire-and-forget) to the user's
  * own Apps Script, which mails one item a day. See "mini-lesson queue (v2)" below.
- * Plain script — no modules; the only network calls in the whole app are the optional POST to
- * the user's own Google Apps Script endpoint and the optional AI-tutor calls in js/tutor.js.
+ * Plain script — no modules; the network calls in the whole app are the optional POST to
+ * the user's own Google Apps Script endpoint (daily e-mail), the Firebase sign-in /
+ * progress-sync layer in js/firebase.js, and the optional AI-tutor calls in js/tutor.js.
  */
 (function () {
   'use strict';
@@ -18,6 +19,7 @@
   var C = window.FableCurriculum;
   var P = window.FableProgress;
   var A = window.FableAudio;
+  var FC = window.FableCloud;
   var el = U.el;
 
   var LANGS = ['korean', 'chinese'];
@@ -627,14 +629,23 @@
   }
 
   function cardAccount() {
-    var p = panel('Account', 'Word Goblin is invite-only; this device is signed in with Google.');
+    var p = panel('Account', 'Word Goblin is members-only; this device is signed in with Google.');
     var s = P.settings;
     var row = el('div', 'signed-row');
     row.appendChild(el('span', 'signed-as',
       'Signed in as ' + (s.signedInAs && s.signedInAs !== 'local' ? s.signedInAs : (s.email || 'unknown'))));
     row.appendChild(U.button('Sign out', 'btn btn-primary btn-sm', function () {
-      P.setSettings({ signedInAs: '' });
-      window.location.reload();          // straight back to the landing gate
+      var finish = function () {
+        P.setSettings({ signedInAs: '' });
+        window.location.reload();        // straight back to the landing gate
+      };
+      // Works even when Firebase is unavailable (offline / file://): the gate flag is
+      // local, so clearing it and reloading is always enough to lock the device.
+      if (FC && FC.available()) {
+        FC.init(function () { FC.signOutUser(finish); });
+      } else {
+        finish();
+      }
     }, { title: 'Only the sign-in is forgotten on this device' }));
     p.appendChild(row);
     p.appendChild(U.para('Signing out forgets the sign-in on this device only — your progress and ' +
@@ -901,10 +912,11 @@
     return that + ' at ' + time;
   }
 
-  /* ========================================= cross-device progress sync (v3) ==
-   * On https the Apps Script reply IS readable, so this half is request/response:
-   * loadProgress → merge → saveProgress. On file:// the reply is opaque; we then skip the
-   * pull entirely rather than risk merging nothing over real progress, and only push.
+  /* ========================================= cross-device progress sync (v4) ==
+   * Firebase edition: the transport is FableCloud (js/firebase.js) — Firestore doc
+   * users/{uid} holds the exported progress blob. Merge semantics are unchanged
+   * (P.mergeCloud, most progress wins); only the wire changed. The e-mail queue sync
+   * above stays on Apps Script and is untouched by any of this.
    */
 
   var PUSH_THROTTLE_MIN = 5;
@@ -921,61 +933,46 @@
   }
 
   function syncConfigured() {
-    var s = P.settings;
-    return !!(s.scriptUrl && s.email && s.syncKey);
+    return !!(P.settings.signedInAs && FC && FC.available());
   }
 
-  function syncActive() { return syncConfigured() && !!P.settings.syncEnabled; }
+  function syncActive() { return syncConfigured() && P.settings.syncEnabled !== false; }
 
   function keyedBody(obj) {
-    // v4: the backend refuses keyless requests outright, so every call carries a key —
-    // generated here on first use if this device never got one from sign-in.
+    // The e-mail feature (Apps Script) refuses keyless requests outright, so every call
+    // carries a key — generated silently on first use. No UI shows it any more; it only
+    // authenticates the mini-lesson subscription, not progress sync.
     if (!P.settings.syncKey) P.setSettings({ syncKey: P.generateSyncKey() });
     obj.key = P.settings.syncKey;
     return obj;
   }
 
+  /** Kept as the single place sync errors are worded; FableCloud errors are already prose. */
   function describeSyncError(err) {
-    if (err === 'bad key') {
-      return 'Sync key rejected — this e-mail is already claimed by a different key. ' +
-        'Enter the key from your other device (or use a different e-mail address).';
-    }
-    if (err === 'unreadable') {
-      if (window.location.protocol === 'file:') {
-        return 'Could not read the reply, so nothing was merged. Opening index.html from disk ' +
-          'can only push — use the hosted (https) version of the app for full sync.';
-      }
-      return 'The script replied, but the reply could not be read. This almost always means the ' +
-        'Apps Script deployment is not public: in script.google.com open Deploy → Manage ' +
-        'deployments → ✏️ Edit, set “Execute as: Me” and “Who has access: Anyone” (NOT “Anyone ' +
-        'with Google account”), press Deploy, and check the URL here ends in /exec (not /dev). ' +
-        'Quick test: open <your URL>?action=status in a private/incognito window — it should ' +
-        'show JSON, not a Google sign-in page.';
-    }
     return err || 'Sync failed.';
   }
 
-  /** pullProgress(cb) — loadProgress → merge into local. Never merges an unreadable reply. */
+  /** pullProgress(cb) — FableCloud.pull → merge into local. */
   function pullProgress(cb) {
     if (!syncConfigured()) { if (cb) cb({ ok: false, error: 'not configured' }); return; }
-    var s = P.settings;
-    postJson(s.scriptUrl, keyedBody({ action: 'loadProgress', email: s.email }), function (res) {
-      if (!res.ok) { if (cb) cb(res); return; }
-      if (res.opaque || !res.data || typeof res.data !== 'object') {
-        if (cb) cb({ ok: false, error: 'unreadable' });
-        return;
-      }
-      var payload = res.data;
-      P.markPulled();
-      if (!payload.progress) { if (cb) cb({ ok: true, had: false }); return; }
-      var merged;
-      try { merged = P.mergeCloud(payload.progress, payload.updatedAt); }
-      catch (e) { if (cb) cb({ ok: false, error: 'That cloud backup could not be merged.' }); return; }
-      if (cb) cb({ ok: true, had: true, merged: merged, updatedAt: payload.updatedAt });
+    FC.init(function (ok) {
+      if (!ok) { if (cb) cb({ ok: false, error: 'Could not reach the sync service — offline?' }); return; }
+      FC.pull(function (err, result) {
+        if (err) { if (cb) cb({ ok: false, error: err }); return; }
+        P.markPulled();
+        if (!result || !result.blob) { if (cb) cb({ ok: true, had: false }); return; }
+        var parsed;
+        try { parsed = JSON.parse(result.blob); }
+        catch (e) { if (cb) cb({ ok: false, error: 'corrupt cloud copy' }); return; }
+        var merged;
+        try { merged = P.mergeCloud(parsed, result.updatedAt); }
+        catch (e2) { if (cb) cb({ ok: false, error: 'That cloud copy could not be merged.' }); return; }
+        if (cb) cb({ ok: true, had: true, merged: merged, updatedAt: result.updatedAt });
+      });
     });
   }
 
-  /** pushProgress({force}, cb) — saveProgress, throttled to one per PUSH_THROTTLE_MIN. */
+  /** pushProgress({force}, cb) — FableCloud.push, throttled to one per PUSH_THROTTLE_MIN. */
   function pushProgress(opts, cb) {
     opts = opts || {};
     if (!syncConfigured()) { if (cb) cb({ ok: false, error: 'not configured' }); return; }
@@ -983,37 +980,31 @@
       if (cb) cb({ ok: false, error: 'throttled' });
       return;
     }
-    var s = P.settings, blob;
-    try { blob = JSON.parse(P.exportJson()); }
-    catch (e) { if (cb) cb({ ok: false, error: 'Could not read local progress.' }); return; }
-
+    var blob = P.exportJson();          // already a JSON string — sent verbatim
     dirtySincePush = false;
-    postJson(s.scriptUrl, keyedBody({
-      action: 'saveProgress',
-      email: s.email,
-      updatedAt: new Date().toISOString(),
-      progress: blob
-    }), function (res) {
-      if (res.ok) P.markPushed();
-      else dirtySincePush = true;
-      if (cb) cb(res);
+    FC.init(function (ok) {
+      if (!ok) {
+        dirtySincePush = true;
+        if (cb) cb({ ok: false, error: 'Could not reach the sync service — offline?' });
+        return;
+      }
+      FC.push(blob, new Date().toISOString(), function (err) {
+        if (!err) P.markPushed();
+        else dirtySincePush = true;
+        if (cb) cb(err ? { ok: false, error: err } : { ok: true });
+      });
     });
   }
 
   /** syncNow(cb) — full round trip: pull + merge, then push the merged result back up. */
   function syncNow(cb) {
     if (!syncConfigured()) {
-      setSyncMsg('Add your Apps Script URL, e-mail and a sync key first.', 'bad');
+      setSyncMsg('Sign in with Google on the hosted app to enable sync.', 'bad');
       if (cb) cb({ ok: false, error: 'not configured' });
       return;
     }
     setSyncMsg('Syncing…', '');
     pullProgress(function (pull) {
-      if (!pull.ok && pull.error === 'bad key') {
-        setSyncMsg(describeSyncError('bad key'), 'bad');
-        if (cb) cb(pull);
-        return;
-      }
       pushProgress({ force: true }, function (push) {
         if (push.ok) {
           var note;
@@ -1023,6 +1014,7 @@
           } else if (pull.had && pull.merged && (pull.merged.changed || pull.merged.adopted)) {
             note = 'Merged your other device’s progress and uploaded the result.';
             setSyncMsg(note, 'ok');
+            applyTheme();  // an adopted theme must take effect now, not on next reload
             render();      // merged data can change every screen
           } else {
             note = pull.had ? 'Already up to date — progress uploaded.' : 'First device: progress uploaded.';
@@ -1043,40 +1035,15 @@
     pushTimer = setTimeout(function () {
       pushTimer = 0;
       if (!syncActive() || !dirtySincePush) return;
-      pushProgress({}, function (res) {
-        if (!res.ok && res.error === 'bad key') setSyncMsg(describeSyncError('bad key'), 'bad');
-      });
+      pushProgress({}, function () {});
     }, 4000);
   }
 
-  /** Best-effort push as the page goes away — sendBeacon survives unload; fetch may not. */
+  /** Best-effort push as the page goes away — Firestore has no sendBeacon path, so this is
+      a plain fire-and-forget push; the SDK's write usually gets out before teardown. */
   function beaconPush() {
     if (!syncActive() || !dirtySincePush) return;
-    var s = P.settings, body;
-    try {
-      body = JSON.stringify(keyedBody({
-        action: 'saveProgress', email: s.email,
-        updatedAt: new Date().toISOString(),
-        progress: JSON.parse(P.exportJson())
-      }));
-    } catch (e) { return; }
-    var sent = false;
-    try {
-      if (navigator.sendBeacon) {
-        sent = navigator.sendBeacon(s.scriptUrl, new Blob([body], { type: 'text/plain;charset=UTF-8' }));
-      }
-    } catch (e) { sent = false; }
-    if (!sent && typeof window.fetch === 'function') {
-      try {
-        window.fetch(s.scriptUrl, {
-          method: 'POST', mode: 'no-cors', keepalive: true,
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: body
-        })['catch'](function () {});
-        sent = true;
-      } catch (e) {}
-    }
-    if (sent) { dirtySincePush = false; P.markPushed(); }
+    pushProgress({ force: true }, function () {});
   }
 
   function cardEmail() {
@@ -1273,256 +1240,23 @@
     xhr.send(body);
   }
 
-  /* Google Identity Services loader — fetched on demand, only over http(s), never cached
-     by the service worker (cross-origin). The app works fully without it. */
-  var gsiCallbacks = null;
-  function loadGsi(cb) {
-    if (window.google && window.google.accounts && window.google.accounts.id) { cb(true); return; }
-    if (gsiCallbacks) { gsiCallbacks.push(cb); return; }
-    gsiCallbacks = [cb];
-    var sc = document.createElement('script');
-    sc.src = 'https://accounts.google.com/gsi/client';
-    sc.async = true;
-    sc.defer = true;
-    sc.onload = function () { flushGsi(true); };
-    sc.onerror = function () { flushGsi(false); };
-    document.head.appendChild(sc);
-  }
-  function flushGsi(ok) {
-    var q = gsiCallbacks || [];
-    gsiCallbacks = null;
-    for (var i = 0; i < q.length; i++) { try { q[i](ok); } catch (e) {} }
-  }
-
-  /* Both the landing gate and the Settings panel render buttons, so a single dispatcher
-     routes credentials to whichever asked last. initialize() binds the client ID, and it
-     must be re-run whenever that ID changes — otherwise a page that initialized with a
-     stale ID keeps minting tokens for it, and the backend rejects every one of them as
-     an audience mismatch until a full reload. */
-  var gisClientId = '';
-  var gisHandler = null;
-
-  /** renderGoogleButton(clientId, host, onCredential, cb(ok)) — official button into host. */
-  function renderGoogleButton(clientId, host, onCredential, cb) {
-    loadGsi(function (ok) {
-      if (!ok) { cb(false); return; }
-      try {
-        if (gisClientId !== clientId) {
-          window.google.accounts.id.initialize({
-            client_id: clientId,
-            callback: function (resp) { if (gisHandler) gisHandler(resp); }
-          });
-          gisClientId = clientId;
-        }
-        gisHandler = onCredential;
-        U.clear(host);
-        window.google.accounts.id.renderButton(host, { theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with' });
-        cb(true);
-      } catch (e) { cb(false); }
-    });
-  }
-
-  /** True when Google sign-in could work at all in this environment. */
-  function gsiPossibleHere() {
+  /** True when hosted sign-in (Firebase Auth) could work at all in this environment. */
+  function hostedHere() {
     var proto = window.location.protocol;
     return proto === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   }
 
-  /**
-   * completeGoogleLogin(resp, status, done) — verify the GIS credential with the user's
-   * Apps Script, adopt {email, syncKey, subscription}, mark the device signed in, sync.
-   * status(msg, kind) paints progress; done(ok) fires after the sync round-trip.
-   */
-  function completeGoogleLogin(resp, status, done) {
-    if (!resp || !resp.credential) { status('Google sign-in returned no credential. Try again.', 'bad'); done(false); return; }
-    status('Verifying your Google sign-in…', '');
-    var body = { action: 'googleLogin', idToken: resp.credential };
-    var invite = pendingInvite();
-    if (invite) body.inviteToken = invite;
-    postJson(P.settings.scriptUrl, body, function (res) {
-      if (res.ok && res.data && res.data.email && res.data.key) {
-        clearInvite();
-        var patch = {
-          email: String(res.data.email),
-          syncKey: P.normalizeKey(res.data.key),
-          syncEnabled: true,
-          signedInAs: String(res.data.email)
-        };
-        if (res.data.subscribed) {
-          patch.subscribed = true;
-          if (U.isArr(res.data.languages)) {
-            var langs = res.data.languages.filter(function (l) { return LANGS.indexOf(l) !== -1; });
-            if (langs.length) patch.activeLangs = langs;
-          }
-        }
-        P.setSettings(patch);
-        status('Signed in as ' + res.data.email + ' — syncing…', 'ok');
-        syncNow(function () { done(true); });
-      } else if (res.ok) {
-        status(describeSyncError('unreadable'), 'bad');
-        done(false);
-      } else {
-        var msg = res.error || 'Google sign-in failed.';
-        // A client-ID mismatch is often just a stale page: this tab bound its Google button
-        // to an ID the backend has since changed. Say so before sending anyone to the editor.
-        if (/client ID|could not be verified|verify/i.test(msg)) {
-          msg += ' If you just changed the backend’s client ID, reload this page fully ' +
-            '(Ctrl+Shift+R, or Cmd+Shift+R) and sign in again — this tab is still using the old one.';
-        }
-        status(msg, 'bad');
-        if (window.console) console.warn('[WordGoblin] googleLogin refused:', res.error);
-        done(false);
-      }
-    });
-  }
-
   function cardSync() {
     var p = panel('Cross-device sync',
-      'Study on your laptop, carry on from your phone. Your progress AND your settings — theme, ' +
-      'mini-lesson languages, subscription state, even your AI-tutor key and model — are stored ' +
-      'under the same Apps Script endpoint and e-mail address as the mini-lesson above, protected ' +
-      'by a sync key you choose. Generate a key here, then on your other device enter the Apps ' +
-      'Script URL and e-mail above, type the same key, and press “Save & sync” — the rest of the ' +
-      'settings fill in from the cloud. Or skip the typing: with your Apps Script URL set, ' +
-      '“Sign in with Google” proves the address and fetches the key in one click. Progress merges ' +
-      'rather than overwrites: whichever device did more of something wins.');
-
-    /* ---- one-click Google sign-in (appears when the backend has it enabled) ---- */
-    var gBox = el('div', 'gsi-box');
-    var gHost = el('div', 'gsi-btn');
-    var gNote = el('p', 'field-hint gsi-note');
-    gBox.appendChild(gHost);
-    gBox.appendChild(gNote);
-    p.appendChild(gBox);
-
-    function initGoogleButton() {
-      var s = P.settings;
-      var defs = window.WORDGOBLIN_DEFAULTS || {};
-      if (!gsiPossibleHere()) {
-        gNote.textContent = 'Google sign-in needs the hosted (https) version of the app; the manual key below works everywhere.';
-        return;
-      }
-      if (!s.scriptUrl && U.str(defs.scriptUrl)) P.setSettings({ scriptUrl: U.str(defs.scriptUrl) });
-      s = P.settings;
-      if (!s.scriptUrl) {
-        gNote.textContent = 'Add your Apps Script URL above and Google sign-in appears here.';
-        return;
-      }
-      if (U.str(defs.googleClientId)) {
-        renderGoogleButton(U.str(defs.googleClientId), gHost, function (resp) {
-          completeGoogleLogin(resp, setSyncMsg, function (ok) { if (ok) render(); });
-        }, function () {});
-      }
-      gNote.textContent = 'Checking this backend for Google sign-in…';
-      var cfgUrl = s.scriptUrl + (s.scriptUrl.indexOf('?') === -1 ? '?' : '&') + 'action=config';
-      window.fetch(cfgUrl).then(function (r) { return r.json(); }).then(function (cfg) {
-        var cid = cfg && cfg.googleClientId;
-        if (!cid) {
-          gNote.textContent = 'One-click sign-in unlocks after a one-time backend step: run setupGoogleLogin() ' +
-            'in your Apps Script (EMAIL-SETUP.md walks through it). The manual key below works regardless.';
-          return;
-        }
-        renderGoogleButton(cid, gHost, function (resp) {
-          completeGoogleLogin(resp, setSyncMsg, function (ok) { if (ok) render(); });
-        }, function (ok) {
-          gNote.textContent = ok
-            ? 'One click proves your address, fetches your sync key, and syncs everything — settings included.'
-            : 'Could not load Google sign-in (offline?). Use the manual key below.';
-        });
-      })['catch'](function () {
-        gNote.textContent = 'Could not reach the Apps Script to check for Google sign-in. The manual key below still works.';
-      });
-    }
-    initGoogleButton();
-
-    var keyRow = el('div', 'key-row');
-    var key = el('input', 'input key-input');
-    key.type = 'text';
-    key.id = 'set-synckey';
-    key.placeholder = 'e.g. K7M2QX9TB4RD';
-    key.value = P.settings.syncKey || '';
-    key.setAttribute('autocomplete', 'off');
-    key.setAttribute('autocapitalize', 'characters');
-    key.setAttribute('spellcheck', 'false');
-    key.addEventListener('change', function () {
-      var k = P.normalizeKey(key.value);
-      key.value = k;
-      P.setSettings({ syncKey: k, syncEnabled: !!k && P.settings.syncEnabled });
-      paint();
-    });
-    keyRow.appendChild(key);
-    keyRow.appendChild(U.button('Generate', 'btn btn-ghost btn-sm', function () {
-      var k = P.generateSyncKey();
-      key.value = k;
-      P.setSettings({ syncKey: k, syncEnabled: true });
-      setSyncMsg('New key generated. Type it on your other device to link them.', 'ok');
-      paint();
-    }, { title: 'Create a new random key' }));
-    keyRow.appendChild(U.button('Copy', 'btn btn-ghost btn-sm', function () {
-      key.focus();
-      key.select();
-      var done = false;
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(key.value);
-          done = true;
-        } else if (document.execCommand) {
-          done = document.execCommand('copy');
-        }
-      } catch (e) { done = false; }
-      setSyncMsg(done ? 'Key copied to the clipboard.' : 'Select the key above and copy it manually.', done ? 'ok' : 'warn');
-    }, { title: 'Copy the key' }));
-    p.appendChild(field('Sync key', keyRow,
-      'Anyone with your e-mail address <b>and</b> this key can read your progress — treat it like a password. It is saved on this device and included in your progress export.'));
-
-    var enableWrap = el('div', 'checks');
-    var enableLab = el('label', 'check');
-    var enable = el('input');
-    enable.type = 'checkbox';
-    enable.id = 'chk-syncenabled';
-    enable.checked = !!P.settings.syncEnabled;
-    enable.addEventListener('change', function () {
-      P.setSettings({ syncEnabled: enable.checked });
-      setSyncMsg(enable.checked ? 'This device will sync automatically.' : 'Automatic syncing paused on this device.', '');
-      paint();
-    });
-    enableLab.appendChild(enable);
-    enableLab.appendChild(el('span', null, 'Keep this device in sync automatically'));
-    enableWrap.appendChild(enableLab);
-    p.appendChild(field('Automatic sync', enableWrap));
-
-    /* The confirm step: save the typed key, run a full sync, then re-render the whole
-       Settings view so every panel (e-mail, AI tutor, appearance) shows the synced values. */
-    var saveRow = el('div', 'btn-row');
-    saveRow.appendChild(U.button('Save & sync', 'btn btn-primary', function () {
-      var k = P.normalizeKey(key.value);
-      key.value = k;
-      P.setSettings({ syncKey: k, syncEnabled: !!k });
-      if (!k) {
-        setSyncMsg('Enter or generate a sync key first.', 'bad');
-        paint();
-        return;
-      }
-      if (!syncConfigured()) {
-        setSyncMsg('Key saved. Now add the Apps Script URL and e-mail in the panel above, then press “Save & sync” again.', 'warn');
-        paint();
-        return;
-      }
-      syncNow(function (res) {
-        if (res && res.ok) {
-          setSyncMsg('Synced — settings below now reflect all your devices.', 'ok');
-        }
-        render();     // rebuild every settings panel with the merged values
-      });
-      paint();
-    }));
-    p.appendChild(saveRow);
+      'Sync is automatic through the Google account you signed in with. Your progress AND your ' +
+      'settings — theme, mini-lesson languages, subscription state, even your AI-tutor key and ' +
+      'model — are saved to your account after you study and merged onto any device where you ' +
+      'sign in. Merging never overwrites: whichever device did more of something wins.');
 
     var box = el('div', 'sync-box');
     var line = el('p', 'sync-line');
     line.setAttribute('role', 'status');
     var btn = U.button('Sync now', 'btn btn-ghost btn-sm', function () {
-      P.setSettings({ syncKey: P.normalizeKey(key.value) });
       syncNow(function () { paint(); });
       paint();
     });
@@ -1542,9 +1276,9 @@
     function paint() {
       var s = P.settings;
       var bits = [];
-      if (!s.syncKey) bits.push('No sync key yet');
-      else if (!syncConfigured()) bits.push('Key set — add the Apps Script URL and e-mail above to use it');
-      else bits.push(s.syncEnabled ? 'Syncing as ' + s.email : 'Sync key ready (automatic sync off)');
+      if (!s.signedInAs || s.signedInAs === 'local') bits.push('Not signed in');
+      else if (!syncConfigured()) bits.push('Signed in as ' + s.signedInAs + ' — sync needs the hosted (https) app');
+      else bits.push('Syncing as ' + s.signedInAs);
       bits.push(stamp(s.lastPullAt, 'last pull'));
       bits.push(stamp(s.lastPushAt, 'last push'));
       line.textContent = bits.join(' · ') + '.';
@@ -1741,43 +1475,13 @@
 
   /* ========================================================== landing gate
    * First thing a new device sees: a full-screen cover requiring Google sign-in.
-   * There is no way past it without a verified sign-in — no skip, no local mode —
-   * and the backend only signs in accounts on its member whitelist (contract v5).
-   * New members arrive via single-use invite links minted in the Apps Script editor:
-   *   <app>/#invite=<token>&be=<base64url of the backend /exec URL>
-   * Both values ride the URL FRAGMENT, which browsers never send to any server, so
-   * the backend address stays out of request logs. Once passed (signedInAs in
-   * settings, device-local), boots go straight in, so the installed PWA still opens
+   * There is no way past it without a verified sign-in — no skip, no local mode.
+   * Sign-in runs through Firebase Auth (js/firebase.js); who may enter is decided by
+   * the Firestore `allowlist` collection, which only the owner can edit — a doc named
+   * after your (lowercased) Google address is your membership. Once passed (signedInAs
+   * in settings, device-local), boots go straight in, so the installed PWA still opens
    * instantly offline on a device that already signed in.
    */
-
-  var INVITE_SS_KEY = 'wordGoblin.invite';
-
-  /** Stashes #invite=…&be=… from an invite link, then cleans the address bar. */
-  function captureInviteLink() {
-    var h = window.location.hash || '';
-    var m = /[#&]invite=([^&]+)/.exec(h);
-    if (!m) return;
-    try { window.sessionStorage.setItem(INVITE_SS_KEY, decodeURIComponent(m[1])); } catch (e) {}
-    var be = /[#&]be=([^&]+)/.exec(h);
-    if (be) {
-      try {
-        var b64 = decodeURIComponent(be[1]).replace(/-/g, '+').replace(/_/g, '/');
-        while (b64.length % 4) b64 += '=';
-        var u = window.atob(b64).trim();
-        if (/^https:\/\/script\.google\.com\/.+\/exec$/.test(u)) P.setSettings({ scriptUrl: u });
-      } catch (e) { /* malformed be= — the URL field still works */ }
-    }
-    window.location.hash = '#/';
-  }
-
-  function pendingInvite() {
-    try { return window.sessionStorage.getItem(INVITE_SS_KEY) || ''; } catch (e) { return ''; }
-  }
-
-  function clearInvite() {
-    try { window.sessionStorage.removeItem(INVITE_SS_KEY); } catch (e) {}
-  }
 
   function showLanding() {
     var ov = el('div', 'landing');
@@ -1803,38 +1507,9 @@
     inner.appendChild(hero);
 
     var card = el('div', 'landing-card');
-    var gHost = el('div', 'gsi-btn landing-gsi');
     var note = el('p', 'field-hint landing-note');
     var status = el('p', 'form-status');
     status.setAttribute('role', 'status');
-    card.appendChild(gHost);
-    card.appendChild(note);
-    card.appendChild(status);
-
-    var defaults = window.WORDGOBLIN_DEFAULTS || {};
-
-    var urlWrap = el('div', 'field landing-url');
-    var urlLabel = el('label', 'field-label', 'Apps Script web-app URL');
-    urlLabel.setAttribute('for', 'landing-scripturl');
-    var url = el('input', 'input');
-    url.type = 'url';
-    url.id = 'landing-scripturl';
-    url.placeholder = 'https://script.google.com/macros/s/…/exec';
-    url.value = P.settings.scriptUrl || U.str(defaults.scriptUrl) || '';
-    urlWrap.appendChild(urlLabel);
-    urlWrap.appendChild(url);
-    urlWrap.appendChild(U.para('Normally filled in for you. Owners: this is your backend from EMAIL-SETUP.md.', 'field-hint'));
-    urlWrap.hidden = true;
-    var reveal = U.button('Use a different backend', 'btn btn-quiet btn-sm landing-reveal', function () {
-      urlWrap.hidden = false;
-      reveal.hidden = true;
-      url.focus();
-    });
-    card.appendChild(reveal);
-    card.appendChild(urlWrap);
-
-    inner.appendChild(card);
-    ov.appendChild(inner);
 
     function statusFn(msg, kind) {
       status.textContent = msg;
@@ -1849,71 +1524,63 @@
       }, 320);
     }
 
-    var shownClientId = '';        // which ID the visible button is bound to
+    var busy = false;                    // one membership check at a time
 
-    /** Draws (or redraws) the Google button. Safe to call again with a corrected ID. */
-    function showButton(cid) {
-      if (!cid || cid === shownClientId) return;
-      shownClientId = cid;
-      renderGoogleButton(cid, gHost, function (resp) {
-        completeGoogleLogin(resp, statusFn, function (ok) { if (ok) dismiss(); });
-      }, function (ok) {
-        note.textContent = ok
-          ? 'Members sign in with their Google account. Not a member yet? Ask for an invite.'
-          : 'Could not load Google sign-in — check your connection, then reload this page.';
-        if (!ok) shownClientId = '';
-      });
-    }
-
-    /**
-     * The button is shown as early as possible and never gated behind typing a URL: the
-     * client ID and backend address are public (js/config.js), and membership — checked
-     * server-side against the whitelist — is what actually decides who gets in.
-     */
-    function tryInit() {
-      var u = (url.value.trim() || P.settings.scriptUrl || U.str(defaults.scriptUrl) || '').trim();
-      if (u && u !== P.settings.scriptUrl) P.setSettings({ scriptUrl: u });
-      if (u && !url.value.trim()) url.value = u;
-
-      if (!gsiPossibleHere()) {
-        U.clear(gHost);
-        note.textContent = 'Google sign-in only works on the hosted (https) app — open ' +
-          'https://sjiwoo.github.io/word-goblin/ to sign in. Copies opened from disk cannot be used.';
-        return;
-      }
-      if (!u) {
-        U.clear(gHost);
-        note.textContent = 'This copy has no backend configured yet. Open your invite link, or ' +
-          'add your Apps Script URL below.';
-        urlWrap.hidden = false;
-        reveal.hidden = true;
-        return;
-      }
-
-      // Seeded ID (js/config.js) paints the button immediately — no round-trip, and it
-      // still works when the backend is slow. The live value below corrects it if needed.
-      var seeded = U.str(defaults.googleClientId);
-      if (seeded) showButton(seeded);
-      else note.textContent = 'Checking your backend…';
-
-      var cfgUrl = u + (u.indexOf('?') === -1 ? '?' : '&') + 'action=config';
-      window.fetch(cfgUrl).then(function (r) { return r.json(); }).then(function (cfg) {
-        var cid = cfg && cfg.googleClientId;
-        if (cid) { showButton(cid); return; }
-        if (!shownClientId) {
-          note.textContent = 'This backend does not have Google sign-in enabled yet — run setupGoogleLogin() in the Apps Script editor (EMAIL-SETUP.md, "One-click Google sign-in"). Sign-in is required to enter.';
+    /** A signed-in Google user arrived (button, redirect return, or cached session). */
+    function handleUser(user) {
+      if (busy || !user || !user.email) return;
+      busy = true;
+      statusFn('Checking membership…', '');
+      FC.checkMember(user.email, function (st) {
+        if (st === 'member') {
+          P.setSettings({ email: user.email, signedInAs: user.email, syncEnabled: true });
+          statusFn('Welcome, ' + user.email + ' — syncing your progress…', 'ok');
+          syncNow(function () { dismiss(); });     // dismiss regardless of sync outcome
+        } else if (st === 'notMember') {
+          statusFn('This Google account (' + user.email + ') is not on the member list. ' +
+            'Ask the owner to add you.', 'bad');
+          FC.signOutUser(function () {});
+          busy = false;
+        } else {
+          statusFn('Could not check the member list — check your connection and try again.', 'bad');
+          busy = false;
         }
-      })['catch'](function () {
-        if (shownClientId) return;         // seeded button is up; the backend can wait
-        note.textContent = 'Could not reach that backend. If the URL is right (ends in /exec) and you are online, ' +
-          'the usual cause is the deployment’s access setting: in script.google.com open Deploy → Manage ' +
-          'deployments → ✏️, set “Execute as: Me” and “Who has access: Anyone”, pick New version, Deploy. ' +
-          'Test: open the URL with ?action=config added, in a private window — you should see JSON, not a sign-in page.';
       });
     }
 
-    url.addEventListener('change', function () { shownClientId = ''; tryInit(); });
-    tryInit();
+    if (!hostedHere()) {
+      note.textContent = 'Sign-in only works on the hosted app — open ' +
+        'https://sjiwoo.github.io/word-goblin/ to sign in. Copies opened from disk cannot be used.';
+    } else if (!FC || !FC.available()) {
+      note.textContent = 'Sign-in is not configured on this copy yet. Owner: paste your Firebase ' +
+        'web-app config into the firebase block in js/config.js — FIREBASE-SETUP.md walks through it.';
+    } else {
+      var signInBtn = U.button('Sign in with Google', 'btn btn-primary landing-google', function () {
+        statusFn('Opening Google sign-in…', '');
+        FC.init(function (ok) {
+          if (!ok) { statusFn('Could not load sign-in — check your connection and reload this page.', 'bad'); return; }
+          FC.signIn(function (err, user) {
+            if (err) { statusFn(err, 'bad'); return; }
+            if (user) handleUser(user);
+          });
+        });
+      });
+      card.appendChild(signInBtn);
+      note.textContent = 'Members sign in with their Google account. Not a member yet? Ask the owner for access.';
+
+      // Also start init right away: a redirect-based sign-in returning to this page, or an
+      // account still cached by Firebase after the local flag was cleared, proceeds without
+      // another click.
+      FC.init(function (ok) {
+        if (!ok) return;
+        FC.onAuth(function (user) { if (user) handleUser(user); });
+      });
+    }
+
+    card.appendChild(note);
+    card.appendChild(status);
+    inner.appendChild(card);
+    ov.appendChild(inner);
     document.body.appendChild(ov);
   }
 
@@ -1945,7 +1612,13 @@
     buildChrome();
     applyTheme();
     C.rebuild();
-    captureInviteLink();               // before routing: #invite=… is not a route
+
+    // The shipped Apps Script URL (js/config.js) seeds the optional e-mail feature so its
+    // Settings field starts filled in; it plays no part in sign-in or progress sync.
+    var defs = window.WORDGOBLIN_DEFAULTS || {};
+    if (!P.settings.scriptUrl && typeof defs.scriptUrl === 'string' && defs.scriptUrl) {
+      P.setSettings({ scriptUrl: defs.scriptUrl });
+    }
 
     var footer = el('footer', 'sitefoot');
     footer.appendChild(el('span', null, 'Word Goblin · offline-first · curriculum after KLEAR / Sogang / Yonsei / TTMIK and Integrated Chinese / HSK / NPCR'));
@@ -1964,10 +1637,11 @@
 
     /* Cross-device progress sync: pull + merge + push at boot, then push after study
        activity (coalesced, ≤1 per 5 min) and once more as the page goes away.
-       AI-tutor config changes (key/model) ride the same push. */
+       AI-tutor config changes (key/model) ride the same push. Offline boots never block:
+       FableCloud.init fails fast and the app simply runs on the local copy. */
     P.subscribe(schedulePush);
     if (window.FableTutor) window.FableTutor.onConfigChange = schedulePush;
-    if (syncActive()) setTimeout(function () { syncNow(); }, 400);
+    if (syncActive()) setTimeout(function () { FC.init(function () { syncNow(); }); }, 400);
     window.addEventListener('pagehide', beaconPush);
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden') beaconPush();

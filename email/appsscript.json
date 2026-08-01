@@ -1,26 +1,24 @@
 {
   "_comment": [
     "FALLBACK ONLY — you normally never touch this file.",
-    "Use it if sign-in fails with 'You do not have permission to call UrlFetchApp.fetch'",
-    "AND running authorizeNow() never shows an authorization dialog. That combination means",
-    "your project pins its scopes explicitly, so Apps Script will not add the missing one.",
+    "Use it if the daily email fails with a permission error AND running setupTrigger()",
+    "never shows an authorization dialog. That combination means your project pins its",
+    "scopes explicitly, so Apps Script will not add a missing one by itself.",
     "",
     "In the Apps Script editor: Project Settings (gear) -> tick 'Show appsscript.json manifest",
     "file in editor' -> open appsscript.json -> paste the oauthScopes array below into it,",
-    "keeping your own timeZone value -> Save -> run authorizeNow() -> accept the prompt ->",
+    "keeping your own timeZone value -> Save -> run setupTrigger() -> accept the prompt ->",
     "Deploy -> Manage deployments -> pencil -> New version -> Deploy.",
     "",
-    "Each scope maps to something this script actually does:",
-    "  script.external_request  verify Google sign-ins (UrlFetchApp -> tokeninfo)",
-    "  script.send_mail         send the daily mini-lesson and invite emails (MailApp)",
-    "  script.scriptapp         install and read the daily trigger (ScriptApp)",
-    "  userinfo.email           know which account owns the script, so the owner is always a member"
+    "Each scope maps to something this v6 (email-only) script actually does:",
+    "  script.send_mail   send the daily mini-lesson email (MailApp)",
+    "  script.scriptapp   install and read the daily trigger (ScriptApp)",
+    "  userinfo.email     know the owner's address, used by sendTestEmail()"
   ],
   "timeZone": "America/Chicago",
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "oauthScopes": [
-    "https://www.googleapis.com/auth/script.external_request",
     "https://www.googleapis.com/auth/script.send_mail",
     "https://www.googleapis.com/auth/script.scriptapp",
     "https://www.googleapis.com/auth/userinfo.email"
