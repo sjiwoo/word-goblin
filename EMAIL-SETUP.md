@@ -243,10 +243,22 @@ service, so no sign-in can ever succeed. Confirm and fix in two steps:
 1. Open **`<your /exec URL>?action=selftest`**. `externalRequests: "working"` (with
    `tokeninfoHttp: 400`, the healthy answer for a dummy token) means this is not your
    problem; `"BLOCKED"` names it outright and prints the underlying error.
-2. To grant it: in the Apps Script editor run any function once (e.g. `checkGoogleLogin`)
-   and **accept the permission prompt** — including **Advanced → "Go to Word Goblin
-   (unsafe)"**, which is Google's standard wording for your own unverified script. Then
-   **Deploy → Manage deployments → ✏️ → New version → Deploy**.
+2. To grant it: in the Apps Script editor run **`authorizeNow()`** — it touches every
+   service this script needs, which is what makes the authorization dialog appear. Accept
+   it, including **Advanced → "Go to Word Goblin (unsafe)"**, Google's standard wording for
+   your own unverified script. Then **Deploy → Manage deployments → ✏️ → New version →
+   Deploy**. `authorizeNow()` prints a per-service OK/FAILED list and also saves it to the
+   `lastAuthCheck` script property, so you can read the result without hunting for the log.
+
+   **If no dialog ever appears** and it still fails, your project pins its OAuth scopes, so
+   Apps Script will not add the missing one by itself. Fix it once: **Project Settings (⚙)
+   → tick "Show appsscript.json manifest file in editor"**, open `appsscript.json`, and copy
+   the `oauthScopes` array from `email/appsscript.json` in this repo into it (keep your own
+   `timeZone`). Save, run `authorizeNow()` again, accept the prompt, redeploy.
+
+   Beware pop-up blockers here: if the run finishes instantly with no dialog and no log
+   output, the consent window was probably blocked. Allow pop-ups for script.google.com and
+   run it again.
 
 If it still fails, **open `<your /exec URL>?action=diag` in a browser tab** — a plain JSON
 self-check that needs no editor and no execution log:

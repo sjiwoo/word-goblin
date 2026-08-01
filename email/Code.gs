@@ -48,7 +48,7 @@ var SENDER_NAME = 'Word Goblin';
  * if the codeVersion shown there is not this value, the DEPLOYMENT is still serving older
  * code — save the file, then Deploy → Manage deployments → ✏️ → New version → Deploy.
  */
-var CODE_VERSION = '2026-08-01-invite-v5b';
+var CODE_VERSION = '2026-08-01-invite-v5c';
 
 /** Where the app lives — used to build invite links. */
 var APP_URL = 'https://sjiwoo.github.io/word-goblin/';
@@ -496,6 +496,50 @@ function cleanClientId_(value) {
 /** The configured client ID, always cleaned — stored and compared in one canonical form. */
 function storedClientId_() {
   return cleanClientId_(PropertiesService.getScriptProperties().getProperty('googleClientId'));
+}
+
+/**
+ * RUN THIS when sign-in reports a permission error ("You do not have permission to call
+ * UrlFetchApp.fetch"). It deliberately touches every service this script needs, which is
+ * what makes Apps Script show the authorization dialog — accept it, including
+ * Advanced → "Go to Word Goblin (unsafe)", which is normal for your own script.
+ *
+ * Then redeploy: Deploy → Manage deployments → ✏️ → New version → Deploy.
+ *
+ * The result is written to the `lastAuthCheck` script property as well as the log, so you
+ * can read it in ⚙ Project Settings → Script Properties if the log is hard to find.
+ */
+function authorizeNow() {
+  var report = [];
+
+  try {
+    var probe = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=authcheck',
+      { muteHttpExceptions: true });
+    report.push('external requests : OK (HTTP ' + probe.getResponseCode() + ' — 400 is the healthy answer)');
+  } catch (err) {
+    report.push('external requests : FAILED — ' + err);
+  }
+  try {
+    report.push('send mail         : OK (' + MailApp.getRemainingDailyQuota() + ' left today)');
+  } catch (err) {
+    report.push('send mail         : FAILED — ' + err);
+  }
+  try {
+    report.push('triggers          : OK (' + ScriptApp.getProjectTriggers().length + ' installed)');
+  } catch (err) {
+    report.push('triggers          : FAILED — ' + err);
+  }
+  try {
+    report.push('account           : ' + Session.getEffectiveUser().getEmail());
+  } catch (err) {
+    report.push('account           : FAILED — ' + err);
+  }
+
+  var msg = report.join('\n');
+  Logger.log(msg + '\n\nIf every line says OK, redeploy a New version and sign in again.');
+  PropertiesService.getScriptProperties().setProperty('lastAuthCheck',
+    new Date().toISOString() + '\n' + msg);
+  return msg;
 }
 
 /**
