@@ -20,9 +20,9 @@
 window.WORDGOBLIN_DEFAULTS = {
   scriptUrl: 'https://script.google.com/macros/s/AKfycbxtlGnGmumFnBzyR4G2ql79LHOL1rqMsKcdhd-hWViYWfv4WPjzYWx194iAWIBg8_ELxA/exec',
   firebase: {
-    apiKey: '',
-    authDomain: '',
-    projectId: '',
-    appId: ''
+    apiKey: 'AIzaSyAtOi5C9r8Yr2Dfyyxtn4wTwLw_WWbOa4Q',
+    authDomain: 'wordgoblin-d29e9.firebaseapp.com',
+    projectId: 'wordgoblin-d29e9',
+    appId: '1:977387689614:web:aaed0d67c9330a0e39dbdf'
   }
 };
