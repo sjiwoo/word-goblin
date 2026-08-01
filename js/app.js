@@ -8,8 +8,8 @@
  * Also owns the v2 daily-mini-lesson client duty: it builds a per-language "lesson queue" of
  * the learner's next unseen / low-mastery words and uploads it (fire-and-forget) to the user's
  * own Apps Script, which mails one item a day. See "mini-lesson queue (v2)" below.
- * Plain script — no modules; the only network call in the whole app is that optional POST to
- * the user's own Google Apps Script endpoint.
+ * Plain script — no modules; the only network calls in the whole app are the optional POST to
+ * the user's own Google Apps Script endpoint and the optional AI-tutor calls in js/tutor.js.
  */
 (function () {
   'use strict';
@@ -605,6 +605,7 @@
     v.appendChild(cardAudio());
     v.appendChild(cardEmail());
     v.appendChild(cardSync());
+    if (window.FableTutor) v.appendChild(window.FableTutor.settingsCard());
     v.appendChild(cardBackup());
     v.appendChild(cardDiagnostics());
     return v;

@@ -29,6 +29,7 @@ fable lingua/
   js/progress.js             ← Agent APP   FableProgress
   js/quiz.js                 ← Agent APP   exercise renderers
   js/lesson.js               ← Agent APP   unit/section renderers incl. linguistics reveal
+  js/tutor.js                ← post-launch  AI tutor chat bubble (Gemini, user's own key)
   js/app.js                  ← Agent APP   router, dashboard, settings (runs last)
   data/korean/foundation.js  ← Agent KO-A  (Hangul module, order 0)
   data/korean/unit01..04.js  ← Agent KO-A
@@ -42,7 +43,29 @@ fable lingua/
 ```
 
 `index.html` script order: all `data/**` files (defer not needed; plain scripts in body), then
-`audio.js`, `progress.js`, `quiz.js`, `lesson.js`, `app.js`.
+`audio.js`, `progress.js`, `quiz.js`, `lesson.js`, `tutor.js`, `app.js`.
+
+### AI tutor (js/tutor.js, added post-launch)
+
+A floating chat bubble on every page, backed by the **Google Gemini API called directly from
+the browser** (the API is CORS-open) — the app stays serverless. Contract points:
+
+- Config lives in its OWN localStorage slot `wordGoblin.tutor.v1` = `{ apiKey, model }`.
+  It is deliberately outside the `wordGoblin.v1` progress blob so the key is **never**
+  included in progress exports, never uploaded by v3 cross-device sync, and never sent to
+  the Apps Script. The only party that ever sees the key is `generativelanguage.googleapis.com`.
+- Endpoint: `POST {API_BASE}{model}:streamGenerateContent?alt=sse` with header
+  `x-goog-api-key`; SSE `data:` lines parsed incrementally; non-streaming
+  `:generateContent` used only by the Settings "Test key" button. Default model
+  `gemini-3.6-flash` (user-selectable in Settings).
+- Each request sends a system instruction with the learner's live context (current
+  track/unit, its section titles, up to 15 vocab terms, overall percent) rebuilt per message.
+- Rendering is markdown-lite (**bold**, `code`, bullets) over escaped text; runs of Hangul /
+  Han characters in replies become click-to-hear spans via `FableAudio.attach`.
+- `window.FableTutor = { settingsCard, open }`; app.js embeds `settingsCard()` in Settings.
+  tutor.js loads after quiz/lesson (needs FableUI/FableAudio/FableCurriculum), before app.js.
+- sw.js never intercepts the API call (cross-origin), so offline mode simply reports
+  "can't chat offline".
 
 ## Data contract (curriculum files)
 

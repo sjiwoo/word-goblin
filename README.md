@@ -23,6 +23,10 @@ audio, offline support, cross-device progress sync, and a free daily mini-lesson
 - **Flashcard review** per language over every word you've seen.
 - **Nothing is locked.** Start anywhere, jump anywhere. Pause one language, continue the
   other — the tracks never touch.
+- **An AI tutor** (the 🧌 bubble in the corner) that answers questions on any page —
+  grammar, etymology, "check my sentence" — grounded in the unit you're reading, with
+  click-to-hear audio on the Korean/Chinese in its replies. Powered by your own free
+  Google Gemini API key, called straight from your browser (see below).
 
 ## Using it
 
@@ -49,6 +53,16 @@ Both are powered by one small Google Apps Script you deploy in your own Google a
   never clobbers).
 
 Everything stays in your own Google account; nothing is sent anywhere else.
+
+## AI tutor (free, optional)
+
+Create a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey)
+(this is separate from a Gemini app subscription — the key is free on its own tier),
+paste it in **Settings → AI tutor**, and the 🧌 bubble comes alive. The key is stored on
+your device only — it is never committed anywhere, never included in progress exports,
+and never touched by cross-device sync; the browser talks to Google's Gemini API
+directly. Optional hardening: in AI Studio, restrict the key to the HTTP referrer
+`sjiwoo.github.io` so it works nowhere else.
 
 ## Extending the curriculum
 
