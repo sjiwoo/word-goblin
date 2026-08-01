@@ -14,7 +14,7 @@
  *
  * Bump CACHE on every deploy to roll clients onto the new build.
  */
-const CACHE = 'word-goblin-v7';
+const CACHE = 'word-goblin-v8';
 
 const PRECACHE = [
   './',

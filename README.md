@@ -38,7 +38,10 @@ and press *Sign in with Google* — your progress, sync key and settings all fil
 that one click. (Where sign-in is impossible — opened from disk, offline, or the backend
 isn't set up — a "continue on this device" link appears instead, so the app never locks
 you out. Once a device is signed in it goes straight to the app, including offline.)
-Editing `js/config.js` with your script URL saves even that pasting step. On a phone, open the URL once and
+Editing `js/config.js` with your script URL saves even that pasting step — and to keep the
+URL out of the public repo, open `tools/encrypt-url.html` locally, encrypt it with a
+passphrase (5+ random words; the tool has a dice button), and commit the encrypted blob
+instead: new devices then ask for the short passphrase rather than the long URL. On a phone, open the URL once and
 *Add to Home Screen*: it installs as an app and works offline afterwards.
 
 Audio uses your device's built-in Korean/Chinese voices (Web Speech API) — click any

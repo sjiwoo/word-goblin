@@ -1232,3 +1232,8 @@ input, textarea, button, select { font: inherit; color: inherit; }
   padding: 8px 12px; border: 1px dashed var(--rule-2); border-radius: var(--r);
 }
 .signed-as { font-size: .88rem; color: var(--ink-2); }
+
+/* passphrase unlock on the landing (encrypted backend URL in config.js) */
+.landing-pass-row { display: flex; gap: 8px; }
+.landing-pass-row .input { flex: 1; min-width: 0; }
+.landing-pass { margin-bottom: .4rem; }

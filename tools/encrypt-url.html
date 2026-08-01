@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word Goblin — encrypt your backend URL</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; padding: 2rem 1.25rem 4rem;
+    font: 16px/1.6 "Segoe UI", -apple-system, sans-serif;
+    background: #f6f1e7; color: #221f1b;
+    max-width: 44rem; margin-inline: auto;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #191713; color: #efe7d6; } }
+  h1 { font-family: Georgia, serif; font-size: 1.6rem; margin-bottom: .2em; }
+  p  { max-width: 60ch; }
+  .hint { font-size: .85rem; opacity: .7; }
+  label { display: block; font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; margin: 1.4rem 0 .3rem; opacity: .8; }
+  input, textarea {
+    width: 100%; box-sizing: border-box; font: inherit; color: inherit;
+    background: rgba(255,255,255,.55); border: 1px solid rgba(125,116,102,.45);
+    border-radius: 10px; padding: .6rem .8rem;
+  }
+  @media (prefers-color-scheme: dark) { input, textarea { background: rgba(0,0,0,.25); } }
+  textarea { font-family: Consolas, Menlo, monospace; font-size: .82rem; min-height: 11rem; }
+  button {
+    font: inherit; cursor: pointer; border: none; border-radius: 999px;
+    padding: .55rem 1.2rem; margin: 1rem .5rem 0 0;
+    background: #8d6b3a; color: #fdf6ec;
+  }
+  button.ghost { background: transparent; color: inherit; border: 1px solid rgba(125,116,102,.55); }
+  #strength { font-size: .85rem; margin-top: .35rem; }
+  .ok  { color: #2f7d55; } .warn { color: #96660d; } .bad { color: #b3352c; }
+  @media (prefers-color-scheme: dark) { .ok { color:#63c48d; } .warn { color:#e0b45f; } .bad { color:#ef8279; } }
+  code { font-family: Consolas, Menlo, monospace; font-size: .9em; }
+</style>
+</head>
+<body>
+<h1>🧌 Encrypt your backend URL</h1>
+<p>Everything on this page runs locally in your browser — the URL and passphrase are never sent
+anywhere, and nothing is saved when you close it. Paste your Apps Script web-app URL, choose a
+passphrase, and copy the result into <code>js/config.js</code>. The encrypted blob is safe to
+publish; only the passphrase (which exists nowhere but your head) unlocks it.</p>
+
+<label for="url">Apps Script web-app URL</label>
+<input id="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false">
+
+<label for="pass">Passphrase</label>
+<input id="pass" type="text" placeholder="e.g. crayon harbor mumble tide spark relic" autocomplete="off" spellcheck="false">
+<div id="strength" class="hint"></div>
+<p class="hint">You will type this once on each new device. Random words are strong <em>and</em>
+typeable — use the dice button, or invent your own (avoid names, dates, lyrics, or anything
+about goblins or languages: crackers try meaningful phrases first).</p>
+
+<button id="roll" class="ghost" type="button">🎲 Roll a 6-word passphrase</button>
+<button id="go" type="button">Encrypt</button>
+
+<label for="out">Paste this into js/config.js</label>
+<textarea id="out" readonly spellcheck="false" placeholder="The finished config.js contents appear here."></textarea>
+<button id="copy" class="ghost" type="button">Copy to clipboard</button>
+<p class="hint">Then commit and push. The landing page will show a passphrase field on devices
+that don't know the URL yet. PBKDF2-SHA256 × 1,500,000 iterations + AES-256-GCM.</p>
+
+<script>
+(function () {
+  'use strict';
+  var IT = 1500000;
+
+  /* 256 distinct common words (8 bits each; 6 words ≈ 48 bits of real entropy). */
+  var WORDS = ('acorn amber anchor apron arrow autumn badge bagel bamboo barn basil beacon berry birch bison blanket blossom bolt bonfire boot bottle breeze brick bridge broom bucket butter cabin cactus camera canal candle canoe canyon carpet carrot castle cedar chalk cherry chimney cinnamon clay cliff clover cobble comet compass copper coral cotton crater crayon cricket crumb crystal cupcake current dagger daisy dawn desert dew dome donkey drift drizzle drum dune eagle ebony echo ember engine falcon feather fern ferry fiddle flame flannel flint fog forest fossil fountain fox freckle frost galaxy garden garlic geyser ginger glacier glove goose granite grape gravel grove hammock harbor harvest hazel heron hill hinge honey hoof horizon iceberg ink island ivory ivy jacket jelly jigsaw juniper kayak kettle kite knot lagoon lantern lava lemon lentil lily lime linen lobster locket loft lumber mango mantle maple marble meadow melon mesa mint mitten morning moss moth mountain mule mural mushroom mustard nectar nest noodle north nutmeg oak oasis ocean olive onion opal orchard otter oven owl paddle pantry parka parsley peach pebble pecan penguin pepper petal pine pistachio plank plum pocket pond poppy prairie pretzel prism pumpkin quartz quill quilt rabbit raft rain raisin rattle reef ribbon ridge river roast rocket rye saddle saffron sage sail salmon sand sapling scarf shell shore shovel sierra silk silver sled slope smoke snow socket sparrow spice spoon spring spruce squash stone stork storm straw stream summit sunset swan syrup tangerine tea thistle thunder tide timber toast tortoise trail train trout truffle tulip tunnel turnip twig umbrella valley vanilla velvet vine violet wagon walnut wave wheat whale willow window winter wolf wool yarn yodel zephyr zinc').split(' ');
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function b64(buf) {
+    var b = '', a = new Uint8Array(buf);
+    for (var i = 0; i < a.length; i++) b += String.fromCharCode(a[i]);
+    return btoa(b);
+  }
+
+  function bitsOf(pass) {
+    // Honest floor: only counts what we can verify (length/charset), not cleverness.
+    var pools = 0;
+    if (/[a-z]/.test(pass)) pools += 26;
+    if (/[A-Z]/.test(pass)) pools += 26;
+    if (/[0-9]/.test(pass)) pools += 10;
+    if (/[^a-zA-Z0-9]/.test(pass)) pools += 20;
+    var raw = pass.replace(/\s+/g, '');
+    return raw.length * Math.log(pools || 1) / Math.LN2;
+  }
+
+  function paintStrength() {
+    var pass = $('pass').value.trim();
+    var s = $('strength');
+    if (!pass) { s.textContent = ''; return; }
+    var words = pass.split(/\s+/).length;
+    var bits = bitsOf(pass);
+    if (words >= 5 || bits >= 60) { s.className = 'ok'; s.textContent = 'Strong — offline brute force is impractical.'; }
+    else if (words >= 4 || bits >= 45) { s.className = 'warn'; s.textContent = 'Decent — fine for this threat model; one more word makes it strong.'; }
+    else { s.className = 'bad'; s.textContent = 'Weak — a short phrase or PIN can be brute-forced offline. Use 5+ random words.'; }
+  }
+  $('pass').addEventListener('input', paintStrength);
+
+  $('roll').addEventListener('click', function () {
+    var pick = new Uint8Array(6);
+    crypto.getRandomValues(pick);
+    var out = [];
+    for (var i = 0; i < 6; i++) out.push(WORDS[pick[i]]);
+    $('pass').value = out.join(' ');
+    paintStrength();
+  });
+
+  $('go').addEventListener('click', function () {
+    var url = $('url').value.trim();
+    var pass = $('pass').value.trim();
+    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) {
+      $('out').value = 'That does not look like an Apps Script /exec URL. Check it and try again.';
+      return;
+    }
+    if (pass.length < 8) { $('out').value = 'Choose a longer passphrase first (5+ random words recommended).'; return; }
+    if (!window.crypto || !crypto.subtle) {
+      $('out').value = 'This browser does not expose WebCrypto here. Open this file in Chrome/Edge/Firefox.';
+      return;
+    }
+    $('out').value = 'Encrypting (the 1.5M key-stretching rounds take a moment)…';
+    var enc = new TextEncoder();
+    var salt = crypto.getRandomValues(new Uint8Array(16));
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey'])
+      .then(function (k) {
+        return crypto.subtle.deriveKey(
+          { name: 'PBKDF2', hash: 'SHA-256', salt: salt, iterations: IT },
+          k, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+      })
+      .then(function (key) { return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, enc.encode(url)); })
+      .then(function (ct) {
+        var blob = { v: 1, it: IT, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+        $('out').value =
+          "/* Word Goblin — js/config.js\n" +
+          " * Optional deployment defaults. Everything here is PUBLIC (this file ships with the\n" +
+          " * app). encryptedScriptUrl is your backend address encrypted with your passphrase\n" +
+          " * (PBKDF2-SHA256 x " + IT.toLocaleString('en-US') + " + AES-256-GCM) - safe to publish; the landing page\n" +
+          " * asks for the passphrase once per device. Generated by tools/encrypt-url.html.\n" +
+          " */\n" +
+          "window.WORDGOBLIN_DEFAULTS = {\n" +
+          "  scriptUrl: '',\n" +
+          "  encryptedScriptUrl: " + JSON.stringify(blob) + "\n" +
+          "};\n";
+      })
+      ['catch'](function (e) { $('out').value = 'Encryption failed: ' + e; });
+  });
+
+  $('copy').addEventListener('click', function () {
+    $('out').select();
+    try { navigator.clipboard ? navigator.clipboard.writeText($('out').value) : document.execCommand('copy'); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
