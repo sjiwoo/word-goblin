@@ -1198,6 +1198,8 @@ input, textarea, button, select { font: inherit; color: inherit; }
   background: var(--card); border: 1px solid var(--rule);
   border-radius: var(--r-lg); box-shadow: var(--shadow-2);
 }
+.landing-signin { display: flex; justify-content: center; margin-bottom: .6rem; }
+.landing-signin:not(:empty) { min-height: 44px; }
 .landing-google {
   display: block;
   margin: .4rem auto .9rem;

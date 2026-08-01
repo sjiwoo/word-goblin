@@ -19,6 +19,10 @@
  */
 window.WORDGOBLIN_DEFAULTS = {
   scriptUrl: 'https://script.google.com/macros/s/AKfycbxtlGnGmumFnBzyR4G2ql79LHOL1rqMsKcdhd-hWViYWfv4WPjzYWx194iAWIBg8_ELxA/exec',
+  // OAuth client for the Google Identity Services sign-in button (public by design).
+  // Its ID token is exchanged with Firebase via signInWithCredential — the reliable
+  // path on mobile, where Firebase's own popup/redirect flows break on github.io.
+  googleClientId: '723840638835-ou9a35tc501rqi8865sq987aqgdqi71a.apps.googleusercontent.com',
   firebase: {
     apiKey: 'AIzaSyAtOi5C9r8Yr2Dfyyxtn4wTwLw_WWbOa4Q',
     authDomain: 'wordgoblin-d29e9.firebaseapp.com',

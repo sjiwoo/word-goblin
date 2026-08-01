@@ -102,6 +102,23 @@ touch data, and each member can only touch their own document.
 
 ---
 
+## How sign-in works on mobile (and why there are two buttons under the hood)
+
+The app prefers the official **Google Identity Services button** (rendered by Google,
+configured by `googleClientId` in `js/config.js`): the ID token it produces is handed to
+Firebase directly (`signInWithCredential`), all on one page. This is the reliable path on
+phones and installed home-screen apps — Firebase's own popup/redirect flows bounce through
+`<project>.firebaseapp.com`, and mobile browsers' storage partitioning breaks that hop
+(the "missing initial state" error). When GIS can't load, the app falls back to a plain
+button using Firebase's popup.
+
+If sign-in through the Google button ever fails with an "invalid credential" style
+message, the OAuth client and the Firebase project disagree: open **Authentication →
+Sign-in method → Google → Web SDK configuration** in the Firebase console, copy the **Web
+client ID** shown there into `googleClientId` in `js/config.js`, and add your app's origin
+(`https://sjiwoo.github.io`) to that client's **Authorized JavaScript origins** in Google
+Cloud console → APIs & Services → Credentials.
+
 ## FAQ
 
 **Are the config values in `js/config.js` secret?**

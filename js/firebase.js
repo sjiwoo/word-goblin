@@ -189,6 +189,11 @@ window.FableCloud = (function () {
     try { provider = new window.firebase.auth.GoogleAuthProvider(); }
     catch (e) { cb('Google sign-in could not start.', null); return; }
     try {
+      // Popup only — deliberately NO signInWithRedirect fallback. The redirect flow
+      // bounces through the firebaseapp.com auth helper and back, and mobile browsers
+      // partition storage across that hop ("missing initial state"), so on a
+      // github.io-hosted app it can never be made reliable. The GIS button
+      // (renderSignIn below) is the primary path; this popup is the fallback.
       window.firebase.auth().signInWithPopup(provider).then(function (res) {
         cb(null, toUser(res && res.user));
       })['catch'](function (err) {
@@ -196,21 +201,99 @@ window.FableCloud = (function () {
         if (code === 'auth/popup-blocked' ||
             code === 'auth/cancelled-popup-request' ||
             code === 'auth/operation-not-supported-in-this-environment') {
-          try {
-            var rp = window.firebase.auth().signInWithRedirect(provider);
-            if (rp && typeof rp['catch'] === 'function') {
-              rp['catch'](function () {
-                cb('Could not open Google sign-in. Check pop-up settings and try again.', null);
-              });
-            }
-            return;                     // page is navigating away; onAuth picks it up later
-          } catch (e2) {}
+          cb('The browser would not open the sign-in window here. Try again, or use a regular browser tab.', null);
+          return;
         }
         cb(shortError(err), null);
       });
     } catch (e3) {
       cb('Google sign-in could not start.', null);
     }
+  }
+
+  /* ------------------------------------------------- GIS credential sign-in */
+
+  var gisState = 'idle';           // 'idle' | 'loading' | 'done'
+  var gisOk = false;
+  var gisQueue = [];
+
+  function loadGis(cb) {
+    if (gisState === 'done') { cb(gisOk); return; }
+    gisQueue.push(cb);
+    if (gisState === 'loading') return;
+    gisState = 'loading';
+    function settle(ok) {
+      gisState = 'done';
+      gisOk = ok && !!(window.google && window.google.accounts && window.google.accounts.id);
+      var q = gisQueue;
+      gisQueue = [];
+      for (var i = 0; i < q.length; i++) { try { q[i](gisOk); } catch (e) {} }
+    }
+    if (window.google && window.google.accounts && window.google.accounts.id) { settle(true); return; }
+    var sc = document.createElement('script');
+    sc.src = 'https://accounts.google.com/gsi/client';
+    sc.async = true;
+    sc.onload = function () { settle(true); };
+    sc.onerror = function () { settle(false); };
+    document.head.appendChild(sc);
+  }
+
+  /**
+   * renderSignIn(host, cb(err, user)) — puts the best available sign-in control in
+   * `host`. Primary: the official Google Identity Services button, whose ID token is
+   * exchanged via signInWithCredential — one same-page hop, no popup-blocker
+   * dependence, no cross-site redirect, works inside installed PWAs (this is the
+   * documented answer to "missing initial state" on mobile). Fallback when GIS or a
+   * client ID is unavailable: a plain button using the popup flow above.
+   * cb may fire more than once (each attempt reports).
+   */
+  function renderSignIn(host, cb) {
+    cb = (typeof cb === 'function') ? cb : noop;
+    if (!host) { cb('No sign-in container.', null); return; }
+
+    function clearHost() { while (host.firstChild) host.removeChild(host.firstChild); }
+
+    function fallbackButton() {
+      clearHost();
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-primary landing-google';
+      b.textContent = 'Sign in with Google';
+      b.addEventListener('click', function () {
+        init(function (ok) {
+          if (!ok) { cb('Could not load sign-in — check your connection and reload this page.', null); return; }
+          signIn(cb);
+        });
+      });
+      host.appendChild(b);
+    }
+
+    init(function (ok) {
+      if (!ok) { cb('Could not load sign-in — check your connection and reload this page.', null); return; }
+      var clientId = String((window.WORDGOBLIN_DEFAULTS || {}).googleClientId || '');
+      if (!clientId) { fallbackButton(); return; }
+      loadGis(function (gok) {
+        if (!gok) { fallbackButton(); return; }
+        try {
+          window.google.accounts.id.initialize({
+            client_id: clientId,
+            callback: function (resp) {
+              if (!resp || !resp.credential) { cb('Google sign-in returned no credential. Try again.', null); return; }
+              var cred;
+              try { cred = window.firebase.auth.GoogleAuthProvider.credential(resp.credential); }
+              catch (e) { cb('Could not use the Google credential.', null); return; }
+              window.firebase.auth().signInWithCredential(cred).then(function (res) {
+                cb(null, toUser(res && res.user));
+              })['catch'](function (err) { cb(shortError(err), null); });
+            }
+          });
+          clearHost();
+          window.google.accounts.id.renderButton(host, {
+            theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with'
+          });
+        } catch (e2) { fallbackButton(); }
+      });
+    });
   }
 
   /** signOutUser(cb) — always calls cb, even if the SDK never loaded. */
@@ -310,6 +393,7 @@ window.FableCloud = (function () {
     ready: ready,
     onAuth: onAuth,
     signIn: signIn,
+    renderSignIn: renderSignIn,
     signOutUser: signOutUser,
     checkMember: checkMember,
     pull: pull,

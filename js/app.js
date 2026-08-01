@@ -1555,17 +1555,12 @@
       note.textContent = 'Sign-in is not configured on this copy yet. Owner: paste your Firebase ' +
         'web-app config into the firebase block in js/config.js — FIREBASE-SETUP.md walks through it.';
     } else {
-      var signInBtn = U.button('Sign in with Google', 'btn btn-primary landing-google', function () {
-        statusFn('Opening Google sign-in…', '');
-        FC.init(function (ok) {
-          if (!ok) { statusFn('Could not load sign-in — check your connection and reload this page.', 'bad'); return; }
-          FC.signIn(function (err, user) {
-            if (err) { statusFn(err, 'bad'); return; }
-            if (user) handleUser(user);
-          });
-        });
+      var signInHost = el('div', 'landing-signin');
+      card.appendChild(signInHost);
+      FC.renderSignIn(signInHost, function (err, user) {
+        if (err) { statusFn(err, 'bad'); return; }
+        if (user) handleUser(user);
       });
-      card.appendChild(signInBtn);
       note.textContent = 'Members sign in with their Google account. Not a member yet? Ask the owner for access.';
 
       // Also start init right away: a redirect-based sign-in returning to this page, or an
