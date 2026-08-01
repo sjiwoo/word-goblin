@@ -608,6 +608,7 @@
     v.appendChild(el('h1', 'page-title', 'Settings'));
     v.appendChild(el('p', 'page-sub', 'Everything here is stored on this device only, except the e-mail address and lesson queue you choose to send to your own mini-lesson script.'));
 
+    v.appendChild(cardAccount());
     v.appendChild(cardAppearance());
     v.appendChild(cardAudio());
     v.appendChild(cardEmail());
@@ -622,6 +623,23 @@
     var p = el('section', 'spanel');
     p.appendChild(el('h2', 'spanel-title', title));
     if (subtitle) p.appendChild(el('p', 'spanel-sub', subtitle));
+    return p;
+  }
+
+  function cardAccount() {
+    var p = panel('Account', 'Word Goblin is invite-only; this device is signed in with Google.');
+    var s = P.settings;
+    var row = el('div', 'signed-row');
+    row.appendChild(el('span', 'signed-as',
+      'Signed in as ' + (s.signedInAs && s.signedInAs !== 'local' ? s.signedInAs : (s.email || 'unknown'))));
+    row.appendChild(U.button('Sign out', 'btn btn-primary btn-sm', function () {
+      P.setSettings({ signedInAs: '' });
+      window.location.reload();          // straight back to the landing gate
+    }, { title: 'Only the sign-in is forgotten on this device' }));
+    p.appendChild(row);
+    p.appendChild(U.para('Signing out forgets the sign-in on this device only — your progress and ' +
+      'settings stay saved here and in your synced copy, and signing back in picks them right up. ' +
+      'Use it to switch Google accounts or to lock the app on a shared device.', 'field-hint'));
     return p;
   }
 
@@ -1365,17 +1383,6 @@
     gBox.appendChild(gHost);
     gBox.appendChild(gNote);
     p.appendChild(gBox);
-
-    var s0 = P.settings;
-    if (s0.signedInAs && s0.signedInAs !== 'local') {
-      var who = el('div', 'signed-row');
-      who.appendChild(el('span', 'signed-as', 'Signed in with Google as ' + s0.signedInAs));
-      who.appendChild(U.button('Sign out on this device', 'btn btn-quiet btn-sm', function () {
-        P.setSettings({ signedInAs: '' });
-        window.location.reload();      // back to the landing gate
-      }, { title: 'Progress and settings stay saved; only the sign-in is forgotten here' }));
-      gBox.appendChild(who);
-    }
 
     function initGoogleButton() {
       var s = P.settings;
