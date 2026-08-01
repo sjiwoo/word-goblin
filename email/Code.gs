@@ -48,7 +48,7 @@ var SENDER_NAME = 'Word Goblin';
  * if the codeVersion shown there is not this value, the DEPLOYMENT is still serving older
  * code — save the file, then Deploy → Manage deployments → ✏️ → New version → Deploy.
  */
-var CODE_VERSION = '2026-08-01-invite-v5';
+var CODE_VERSION = '2026-08-01-invite-v5b';
 
 /** Where the app lives — used to build invite links. */
 var APP_URL = 'https://sjiwoo.github.io/word-goblin/';
@@ -144,6 +144,31 @@ function doGet(e) {
   // `?action=diag` — self-check you can read in any browser tab, so diagnosing a broken
   // sign-in never depends on finding the Apps Script execution log. Counts and public
   // values only: no addresses, no sync keys, no invite tokens.
+  // `?action=selftest` — proves in a browser tab whether this script may make external
+  // requests at all. Sign-in verification calls Google's tokeninfo endpoint, so if that
+  // call cannot run, every sign-in fails no matter how correct the client ID is.
+  if (String(params.action || '').toLowerCase() === 'selftest') {
+    var test = { ok: true, codeVersion: CODE_VERSION, check: 'external requests (needed to verify sign-ins)' };
+    try {
+      var probe = UrlFetchApp.fetch(
+        'https://oauth2.googleapis.com/tokeninfo?id_token=selftest-not-a-real-token',
+        { muteHttpExceptions: true });
+      test.externalRequests = 'working';
+      test.tokeninfoHttp = probe.getResponseCode();   // 400 is the expected, healthy answer
+      test.verdict = 'This backend can verify Google sign-ins. If sign-in still fails, the ' +
+                     'cause is elsewhere — open ?action=diag and compare the client ID.';
+    } catch (err) {
+      test.externalRequests = 'BLOCKED';
+      test.error = String(err).slice(0, 300);
+      test.verdict = 'This script is not authorized to make external requests, so it can never ' +
+                     'verify a sign-in. Fix: open the Apps Script editor, run any function once ' +
+                     '(e.g. checkGoogleLogin), accept the permission prompt — including Advanced → ' +
+                     '"Go to Word Goblin (unsafe)", which is normal for your own script — then ' +
+                     'Deploy → Manage deployments → ✏️ → New version → Deploy.';
+    }
+    return jsonOut_(test);
+  }
+
   if (String(params.action || '').toLowerCase() === 'diag') {
     var rawId = PropertiesService.getScriptProperties().getProperty('googleClientId');
     var cleanId = storedClientId_();
@@ -538,21 +563,24 @@ function googleLogin_(idToken, inviteToken) {
     // UrlFetchApp needs the script.external_request scope. A project authorized before
     // this feature existed has no such grant, so every verification throws until the
     // owner runs a function once in the editor and accepts the new permission prompt.
-    if (/authoriz|permission|scope/i.test(fetchError)) {
+    if (!httpCode) {
+      // The call never came back at all, so this is not about the credential: the script
+      // could not reach Google's verification service. Missing authorization is the usual
+      // reason, and ?action=selftest settles it in one browser tab.
       return jsonOut_({
         ok: false,
-        code: 'needsAuthorization',
-        error: 'This backend has not been authorized to verify sign-ins yet. Owner fix: open the ' +
-               'Apps Script editor, run any function once (e.g. checkGoogleLogin) and accept the ' +
-               'permission prompt, then redeploy a New version.'
+        code: 'verifierUnreachable',
+        error: 'This backend could not run its sign-in verification' +
+               (fetchError ? ' (' + fetchError.slice(0, 140) + ')' : '') +
+               '. Owner fix: it is almost always missing authorization — open the Apps Script ' +
+               'editor, run any function once and accept the permission prompt, then redeploy a ' +
+               'New version. Add ?action=selftest to your web-app URL to confirm.'
       });
     }
     return jsonOut_({
       ok: false,
-      error: 'Google could not confirm that sign-in' +
-             (httpCode ? ' (verification returned HTTP ' + httpCode + ')' : '') +
-             (fetchError ? ' (' + fetchError.slice(0, 120) + ')' : '') +
-             '. The credential may have expired — reload the page and sign in again.'
+      error: 'Google rejected that sign-in credential (verification returned HTTP ' + httpCode +
+             '). It may have expired — reload the page and sign in again.'
     });
   }
 

@@ -236,6 +236,18 @@ client ID is public by design; membership plus the sync key gate all data access
 page that loaded before you last changed the backend's client ID keeps using the old one,
 and every token it mints is then rejected. This is the most common cause by far.
 
+**If the message mentions the backend could not run its verification** (no HTTP code in it),
+the script is not authorized to make external requests — it cannot call Google's tokeninfo
+service, so no sign-in can ever succeed. Confirm and fix in two steps:
+
+1. Open **`<your /exec URL>?action=selftest`**. `externalRequests: "working"` (with
+   `tokeninfoHttp: 400`, the healthy answer for a dummy token) means this is not your
+   problem; `"BLOCKED"` names it outright and prints the underlying error.
+2. To grant it: in the Apps Script editor run any function once (e.g. `checkGoogleLogin`)
+   and **accept the permission prompt** — including **Advanced → "Go to Word Goblin
+   (unsafe)"**, which is Google's standard wording for your own unverified script. Then
+   **Deploy → Manage deployments → ✏️ → New version → Deploy**.
+
 If it still fails, **open `<your /exec URL>?action=diag` in a browser tab** — a plain JSON
 self-check that needs no editor and no execution log:
 
