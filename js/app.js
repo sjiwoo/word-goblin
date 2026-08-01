@@ -1240,10 +1240,13 @@
 
   function cardSync() {
     var p = panel('Cross-device sync',
-      'Study on your laptop, carry on from your phone. Your progress is stored under the same ' +
-      'Apps Script endpoint and e-mail address as the mini-lesson above, protected by a sync key ' +
-      'you choose. Generate a key here, then type the same key on your other device. Progress ' +
-      'merges rather than overwrites: whichever device did more of something wins.');
+      'Study on your laptop, carry on from your phone. Your progress AND your settings — theme, ' +
+      'mini-lesson languages, subscription state, even your AI-tutor key and model — are stored ' +
+      'under the same Apps Script endpoint and e-mail address as the mini-lesson above, protected ' +
+      'by a sync key you choose. Generate a key here, then on your other device enter the Apps ' +
+      'Script URL and e-mail above, type the same key, and press “Save & sync” — the rest of the ' +
+      'settings fill in from the cloud. Progress merges rather than overwrites: whichever device ' +
+      'did more of something wins.');
 
     var keyRow = el('div', 'key-row');
     var key = el('input', 'input key-input');
@@ -1301,10 +1304,37 @@
     enableWrap.appendChild(enableLab);
     p.appendChild(field('Automatic sync', enableWrap));
 
+    /* The confirm step: save the typed key, run a full sync, then re-render the whole
+       Settings view so every panel (e-mail, AI tutor, appearance) shows the synced values. */
+    var saveRow = el('div', 'btn-row');
+    saveRow.appendChild(U.button('Save & sync', 'btn btn-primary', function () {
+      var k = P.normalizeKey(key.value);
+      key.value = k;
+      P.setSettings({ syncKey: k, syncEnabled: !!k });
+      if (!k) {
+        setSyncMsg('Enter or generate a sync key first.', 'bad');
+        paint();
+        return;
+      }
+      if (!syncConfigured()) {
+        setSyncMsg('Key saved. Now add the Apps Script URL and e-mail in the panel above, then press “Save & sync” again.', 'warn');
+        paint();
+        return;
+      }
+      syncNow(function (res) {
+        if (res && res.ok) {
+          setSyncMsg('Synced — settings below now reflect all your devices.', 'ok');
+        }
+        render();     // rebuild every settings panel with the merged values
+      });
+      paint();
+    }));
+    p.appendChild(saveRow);
+
     var box = el('div', 'sync-box');
     var line = el('p', 'sync-line');
     line.setAttribute('role', 'status');
-    var btn = U.button('Sync now', 'btn btn-primary btn-sm', function () {
+    var btn = U.button('Sync now', 'btn btn-ghost btn-sm', function () {
       P.setSettings({ syncKey: P.normalizeKey(key.value) });
       syncNow(function () { paint(); });
       paint();
@@ -1567,8 +1597,10 @@
     }
 
     /* Cross-device progress sync: pull + merge + push at boot, then push after study
-       activity (coalesced, ≤1 per 5 min) and once more as the page goes away. */
+       activity (coalesced, ≤1 per 5 min) and once more as the page goes away.
+       AI-tutor config changes (key/model) ride the same push. */
     P.subscribe(schedulePush);
+    if (window.FableTutor) window.FableTutor.onConfigChange = schedulePush;
     if (syncActive()) setTimeout(function () { syncNow(); }, 400);
     window.addEventListener('pagehide', beaconPush);
     document.addEventListener('visibilitychange', function () {

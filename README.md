@@ -58,10 +58,12 @@ Everything stays in your own Google account; nothing is sent anywhere else.
 
 Create a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey)
 (this is separate from a Gemini app subscription — the key is free on its own tier),
-paste it in **Settings → AI tutor**, and the 🧌 bubble comes alive. The key is stored on
-your device only — it is never committed anywhere, never included in progress exports,
-and never touched by cross-device sync; the browser talks to Google's Gemini API
-directly. Optional hardening: in AI Studio, restrict the key to the HTTP referrer
+paste it in **Settings → AI tutor**, hit **Save**, and the 🧌 bubble comes alive. The
+browser talks to Google's Gemini API directly; the key is never committed anywhere. If
+you use cross-device sync, the key and model choice travel with the rest of your
+settings through your own Apps Script (gated by your sync key), so you only paste it
+once — on a second device, enter the sync key and press **Save & sync** and everything
+fills in. Optional hardening: in AI Studio, restrict the key to the HTTP referrer
 `sjiwoo.github.io` so it works nowhere else.
 
 ## Extending the curriculum

@@ -7,6 +7,10 @@
  *                                syncKey, syncEnabled, lastPushAt, lastPullAt} }
  * v3 adds mergeCloud(): "most progress wins" reconciliation with a cloud copy of this same
  * shape, so two devices can be brought into agreement without either losing work.
+ * The AI-tutor config (Gemini key + model) lives in ITS OWN slot (wordGoblin.tutor.v1,
+ * owned by tutor.js) but is bridged into exports and cross-device sync here, so entering
+ * the key on one device carries it to the others. Sync never blanks a key: an empty cloud
+ * value is ignored.
  * The two language objects are fully independent — nothing in one ever reads the other.
  * Streak = consecutive calendar days with any recorded activity in THAT language.
  * Falls back to an in-memory store if localStorage is unavailable (private mode / file://
@@ -420,6 +424,45 @@ window.FableProgress = (function () {
     return (Date.now() - d.getTime()) / 60000;
   }
 
+  /* ------------------------------------------------- tutor config bridge
+   * tutor.js owns wordGoblin.tutor.v1; these helpers read/write it through the
+   * FableTutor API when it is loaded (keeping its in-memory copy honest) and fall
+   * back to localStorage so exports still work if tutor.js is absent. */
+
+  var TUTOR_KEY = 'wordGoblin.tutor.v1';
+
+  function tutorCfg() {
+    try {
+      if (window.FableTutor && window.FableTutor.getSync) return window.FableTutor.getSync();
+    } catch (e) {}
+    try {
+      var raw = window.localStorage.getItem(TUTOR_KEY);
+      if (raw) {
+        var o = JSON.parse(raw);
+        if (o && typeof o === 'object') {
+          return { apiKey: typeof o.apiKey === 'string' ? o.apiKey : '', model: typeof o.model === 'string' ? o.model : '' };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  /** applyTutorCfg(o) → true if anything changed. Empty values never overwrite. */
+  function applyTutorCfg(o) {
+    if (!o || typeof o !== 'object') return false;
+    var cur = tutorCfg() || { apiKey: '', model: '' };
+    var next = { apiKey: cur.apiKey || '', model: cur.model || '' };
+    var changed = false;
+    if (typeof o.apiKey === 'string' && o.apiKey && o.apiKey !== next.apiKey) { next.apiKey = o.apiKey; changed = true; }
+    if (typeof o.model === 'string' && o.model && o.model !== next.model) { next.model = o.model; changed = true; }
+    if (!changed) return false;
+    try {
+      if (window.FableTutor && window.FableTutor.applySync) { window.FableTutor.applySync(next); return true; }
+    } catch (e) {}
+    try { window.localStorage.setItem(TUTOR_KEY, JSON.stringify(next)); } catch (e) {}
+    return true;
+  }
+
   /* ------------------------------------------------ cross-device merge (v3) */
 
   /* Settings that identify THIS device / THIS account and must never be taken from the
@@ -535,6 +578,7 @@ window.FableProgress = (function () {
           adopted = true;
         }
       }
+      if (applyTutorCfg(cloudRaw.tutor)) adopted = true;
     }
 
     if (changed || adopted) save();
@@ -553,7 +597,12 @@ window.FableProgress = (function () {
   /* ------------------------------------------------------- export / import */
 
   function exportJson() {
-    try { return JSON.stringify(state, null, 2); }
+    try {
+      var out = { version: state.version, korean: state.korean, chinese: state.chinese, settings: state.settings };
+      var t = tutorCfg();
+      if (t && (t.apiKey || t.model)) out.tutor = t;
+      return JSON.stringify(out, null, 2);
+    }
     catch (e) { return JSON.stringify(blankState(), null, 2); }
   }
 
@@ -567,6 +616,7 @@ window.FableProgress = (function () {
       return { ok: false, error: 'This file does not look like a Word Goblin backup.' };
     }
     state = coerce(parsed);
+    applyTutorCfg(parsed.tutor);
     save();
     return { ok: true };
   }

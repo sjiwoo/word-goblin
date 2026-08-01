@@ -52,6 +52,12 @@
       if (Object.prototype.hasOwnProperty.call(patch, k)) cfg[k] = patch[k];
     }
     try { window.localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); } catch (e) {}
+    // Let app.js schedule a cross-device push so other devices pick the change up.
+    try {
+      if (window.FableTutor && typeof window.FableTutor.onConfigChange === 'function') {
+        window.FableTutor.onConfigChange();
+      }
+    } catch (e) {}
   }
 
   function configured() { return !!cfg.apiKey; }
@@ -339,8 +345,9 @@
       setup.appendChild(U.para(
         'The tutor talks to Google Gemini straight from your browser using your own free API key ' +
         '(this is separate from a Gemini app subscription). Create one at ' +
-        '<b>aistudio.google.com</b> → “Get API key”, then paste it here. It is stored on this ' +
-        'device only — never synced, never uploaded.', 'tutor-setup-p'));
+        '<b>aistudio.google.com</b> → “Get API key”, then paste it here. If you use cross-device ' +
+        'sync, the key travels to your other devices through your own Apps Script; it never goes ' +
+        'anywhere else.', 'tutor-setup-p'));
       var link = el('a', 'tutor-link', 'Open Google AI Studio ↗');
       link.href = 'https://aistudio.google.com/app/apikey';
       link.target = '_blank';
@@ -507,10 +514,10 @@
     p.appendChild(U.para(
       'The 🧌 bubble in the corner answers questions on any page, grounded in the unit you ' +
       'are reading. It calls Google’s Gemini API <b>directly from your browser</b> with your ' +
-      'own key — the app has no server and your key is stored on this device only (never in ' +
-      'progress exports, never in cross-device sync). Create a free key at ' +
-      'aistudio.google.com → “Get API key”. Note: a Gemini app subscription is separate — ' +
-      'the API key is free on its own generous tier.', 'spanel-sub'));
+      'own key — the app has no server. The key is saved on this device and, if cross-device ' +
+      'sync is set up, carried to your other devices through your own Apps Script (it is sent ' +
+      'nowhere else). Create a free key at aistudio.google.com → “Get API key”. Note: a Gemini ' +
+      'app subscription is separate — the API key is free on its own generous tier.', 'spanel-sub'));
 
     function field(labelText, node, hint) {
       var w = el('div', 'field');
@@ -558,7 +565,14 @@
     var status = el('p', 'form-status');
     status.setAttribute('role', 'status');
     var row = el('div', 'btn-row');
-    row.appendChild(U.button('Test key', 'btn btn-primary', function () {
+    row.appendChild(U.button('Save', 'btn btn-primary', function () {
+      saveCfg({ apiKey: key.value.trim(), model: sel.value });
+      status.textContent = cfg.apiKey
+        ? 'Saved. It will reach your other devices on their next sync.'
+        : 'Saved (no key set — the tutor stays asleep until you add one).';
+      status.className = 'form-status ok';
+    }));
+    row.appendChild(U.button('Test key', 'btn btn-ghost', function () {
       var k = key.value.trim();
       if (!k) { status.textContent = 'Paste a key first.'; status.className = 'form-status bad'; return; }
       saveCfg({ apiKey: k, model: sel.value });
@@ -584,7 +598,24 @@
 
   function boot() { buildUi(); }
 
-  window.FableTutor = { settingsCard: settingsCard, open: function () { togglePanel(true); } };
+  window.FableTutor = {
+    settingsCard: settingsCard,
+    open: function () { togglePanel(true); },
+
+    /* Cross-device sync bridge (called by progress.js). getSync feeds exports/pushes;
+       applySync lands a merged cloud config in this module's live cfg + the UI. */
+    getSync: function () { return { apiKey: cfg.apiKey, model: cfg.model }; },
+    applySync: function (o) {
+      if (!o || typeof o !== 'object') return;
+      var patch = {};
+      if (typeof o.apiKey === 'string' && o.apiKey) patch.apiKey = o.apiKey;
+      if (typeof o.model === 'string' && o.model) patch.model = o.model;
+      saveCfg(patch);
+      var tag = panel && panel.querySelector('.tutor-model');
+      if (tag) tag.textContent = cfg.model;
+    },
+    onConfigChange: null
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

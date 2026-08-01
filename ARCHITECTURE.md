@@ -50,10 +50,15 @@ fable lingua/
 A floating chat bubble on every page, backed by the **Google Gemini API called directly from
 the browser** (the API is CORS-open) — the app stays serverless. Contract points:
 
-- Config lives in its OWN localStorage slot `wordGoblin.tutor.v1` = `{ apiKey, model }`.
-  It is deliberately outside the `wordGoblin.v1` progress blob so the key is **never**
-  included in progress exports, never uploaded by v3 cross-device sync, and never sent to
-  the Apps Script. The only party that ever sees the key is `generativelanguage.googleapis.com`.
+- Config lives in its OWN localStorage slot `wordGoblin.tutor.v1` = `{ apiKey, model }`,
+  but is **bridged into exports and v3 cross-device sync** by progress.js: `exportJson()`
+  grafts a top-level `tutor` field onto the blob (via `FableTutor.getSync()`, localStorage
+  fallback), `mergeCloud()` adopts `cloudRaw.tutor` under the same newest-blob-wins rule as
+  settings (routed through `FableTutor.applySync()` so the live UI updates), and
+  `importJson()` restores it from backups. Guard: an empty cloud/backup value never blanks
+  a locally stored key. `FableTutor.onConfigChange` is set by app.js to `schedulePush` so
+  key/model edits propagate. The key is only ever sent to the user's own Apps Script
+  (inside the progress blob, gated by the sync key) and `generativelanguage.googleapis.com`.
 - Endpoint: `POST {API_BASE}{model}:streamGenerateContent?alt=sse` with header
   `x-goog-api-key`; SSE `data:` lines parsed incrementally; non-streaming
   `:generateContent` used only by the Settings "Test key" button. Default model
