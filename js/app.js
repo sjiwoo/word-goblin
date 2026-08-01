@@ -1889,7 +1889,10 @@
           skip.hidden = ok;
         });
       })['catch'](function () {
-        note.textContent = 'Could not reach that backend. Check the URL (it should end in /exec) and your connection.';
+        note.textContent = 'Could not reach that backend. If the URL is right (ends in /exec) and you are online, ' +
+          'the usual cause is the deployment’s access setting: in script.google.com open Deploy → Manage ' +
+          'deployments → ✏️, set “Execute as: Me” and “Who has access: Anyone”, pick New version, Deploy. ' +
+          'Test: open the URL with ?action=config added, in a private window — you should see JSON, not a sign-in page.';
         skip.hidden = false;
       });
     }
