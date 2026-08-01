@@ -230,6 +230,24 @@ client ID is public by design; membership plus the sync key gate all data access
 
 ---
 
+### If sign-in says "could not be verified"
+
+The backend rejected the Google credential. Work through this in order:
+
+1. **Make sure the backend is running the current code.** Paste the latest `Code.gs`, press
+   **💾 Save**, then **Deploy → Manage deployments → ✏️ → New version → Deploy**. An unsaved
+   file or an un-redeployed project keeps serving the old code — this alone causes most
+   "I already fixed that" confusion.
+2. **Run `checkGoogleLogin()`** (function dropdown → ▶ Run → read the **Execution log**). It
+   prints the stored client ID between brackets so stray spaces, a newline, or pasted quotes
+   are visible, and warns if the value isn't a client ID at all (the client *secret* is a
+   common mis-paste).
+3. **Try signing in once more, then reopen the log.** A client-ID mismatch now prints the
+   token's audience and the stored value on adjacent lines — if they differ, run
+   `setupGoogleLogin()` with the "token audience" value and redeploy.
+4. If the log instead shows an HTTP code from tokeninfo, the credential had expired: reload
+   the app and sign in again.
+
 ## Members & invites
 
 The app is **invite-only**: only Google accounts on the script's whitelist can sign in or

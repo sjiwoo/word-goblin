@@ -131,10 +131,7 @@ function doGet(e) {
   // `?action=config` — public, non-secret client configuration (the OAuth client ID is
   // public by design). The app uses this to decide whether to show "Sign in with Google".
   if (String(params.action || '').toLowerCase() === 'config') {
-    return jsonOut_({
-      ok: true,
-      googleClientId: String(PropertiesService.getScriptProperties().getProperty('googleClientId') || '')
-    });
+    return jsonOut_({ ok: true, googleClientId: storedClientId_() });
   }
 
   if (String(params.action || '').toLowerCase() === 'loadprogress') {
@@ -412,8 +409,55 @@ function setupGoogleLogin() {
   if (CLIENT_ID.indexOf('PASTE-YOUR') === 0) {
     throw new Error('Edit setupGoogleLogin() first: replace the placeholder with your real OAuth client ID, then run it again.');
   }
-  PropertiesService.getScriptProperties().setProperty('googleClientId', CLIENT_ID);
-  Logger.log('Google sign-in enabled for client ID: ' + CLIENT_ID);
+  var id = cleanClientId_(CLIENT_ID);
+  if (!/\.apps\.googleusercontent\.com$/.test(id)) {
+    throw new Error('"' + id + '" does not look like an OAuth client ID — it should end in ' +
+                    '.apps.googleusercontent.com. Copy the Client ID (not the secret) from ' +
+                    'console.cloud.google.com → Credentials.');
+  }
+  PropertiesService.getScriptProperties().setProperty('googleClientId', id);
+  Logger.log('Google sign-in enabled for client ID: ' + id +
+             '\nRemember to redeploy (Deploy → Manage deployments → ✏️ → New version) if you also edited the code.');
+}
+
+/** Strips stray whitespace and pasted surrounding quotes from a client ID. */
+function cleanClientId_(value) {
+  return String(value == null ? '' : value).trim().replace(/^["'<]+|[">']+$/g, '').trim();
+}
+
+/** The configured client ID, always cleaned — stored and compared in one canonical form. */
+function storedClientId_() {
+  return cleanClientId_(PropertiesService.getScriptProperties().getProperty('googleClientId'));
+}
+
+/**
+ * DIAGNOSTIC — run this when sign-in fails. Prints the client ID this backend is
+ * configured with, flags the usual mistakes (whitespace, quotes, wrong value pasted),
+ * and reminds you where the mismatching one would have come from.
+ */
+function checkGoogleLogin() {
+  var raw = PropertiesService.getScriptProperties().getProperty('googleClientId');
+  if (raw === null) {
+    Logger.log('No googleClientId property is set. Run setupGoogleLogin() (or add the property by ' +
+               'hand in ⚙ Project Settings → Script Properties).');
+    return;
+  }
+  var clean = cleanClientId_(raw);
+  Logger.log('Stored value, delimited: [' + raw + ']  (' + String(raw).length + ' chars)');
+  Logger.log('After cleaning       : [' + clean + ']  (' + clean.length + ' chars)');
+
+  if (raw !== clean) {
+    Logger.log('⚠ The stored value has stray whitespace or quotes. Older versions of this script ' +
+               'compared it literally, which broke sign-in. Re-save it clean: run setupGoogleLogin() ' +
+               'with the cleaned value above, then redeploy a New version.');
+  }
+  if (!/\.apps\.googleusercontent\.com$/.test(clean)) {
+    Logger.log('⚠ That does not end in .apps.googleusercontent.com — it may be the client SECRET or ' +
+               'the wrong field. Copy the Client ID from console.cloud.google.com → APIs & Services ' +
+               '→ Credentials → your Web application client.');
+  }
+  Logger.log('If sign-in still fails, sign in once more and reopen this Executions log: a mismatch ' +
+             'now prints both the token audience and this stored value, side by side.');
 }
 
 /**
@@ -423,7 +467,7 @@ function setupGoogleLogin() {
  * and a verified email address.
  */
 function googleLogin_(idToken, inviteToken) {
-  var clientId = String(PropertiesService.getScriptProperties().getProperty('googleClientId') || '');
+  var clientId = storedClientId_();
   if (!clientId) {
     return jsonOut_({ ok: false, error: 'Google sign-in is not enabled on this backend yet — run setupGoogleLogin() in the Apps Script editor (see EMAIL-SETUP.md).' });
   }
@@ -431,21 +475,50 @@ function googleLogin_(idToken, inviteToken) {
   if (!token) return jsonOut_({ ok: false, error: 'The Google credential was missing. Try signing in again.' });
 
   var payload = null;
+  var httpCode = 0;
   try {
     var res = UrlFetchApp.fetch(
       'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
       { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) payload = JSON.parse(res.getContentText());
+    httpCode = res.getResponseCode();
+    if (httpCode === 200) payload = JSON.parse(res.getContentText());
+    else Logger.log('googleLogin tokeninfo HTTP ' + httpCode + ': ' + res.getContentText().slice(0, 300));
   } catch (err) {
     Logger.log('googleLogin tokeninfo error: ' + err);
     payload = null;
   }
 
-  if (!payload || payload.aud !== clientId ||
-      (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') ||
-      String(payload.email_verified) !== 'true') {
-    Logger.log('googleLogin rejected: ' + (payload ? 'aud/iss/verification mismatch' : 'token not verifiable'));
-    return jsonOut_({ ok: false, error: 'Google sign-in could not be verified. Try again.' });
+  // Each failure gets its own message and log line — "could not be verified" for
+  // everything made the one common cause (a mismatched client ID) undiagnosable.
+  if (!payload) {
+    return jsonOut_({
+      ok: false,
+      error: 'Google could not confirm that sign-in' +
+             (httpCode ? ' (verification returned HTTP ' + httpCode + ')' : '') +
+             '. The credential may have expired — reload the page and sign in again.'
+    });
+  }
+
+  var aud = String(payload.aud || '').trim();
+  if (aud !== clientId) {
+    Logger.log('googleLogin rejected — client ID mismatch.\n  token audience : ' + aud +
+               '\n  stored property: ' + clientId +
+               '\n  Fix: run checkGoogleLogin(), then setupGoogleLogin() with the ID shown as "token audience".');
+    return jsonOut_({
+      ok: false,
+      error: 'This backend is set up with a different Google client ID than the app used. ' +
+             'In the Apps Script editor run checkGoogleLogin() — it prints both and how to fix it.'
+    });
+  }
+
+  if (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') {
+    Logger.log('googleLogin rejected — unexpected issuer: ' + payload.iss);
+    return jsonOut_({ ok: false, error: 'That sign-in did not come from Google. Try again.' });
+  }
+
+  if (String(payload.email_verified) !== 'true') {
+    Logger.log('googleLogin rejected — email not verified: ' + payload.email);
+    return jsonOut_({ ok: false, error: 'That Google account’s email address is not verified, so it cannot be used here.' });
   }
 
   var email = normalizeEmail_(payload.email);
