@@ -70,6 +70,7 @@ window.FableProgress = (function () {
         theme: 'auto',           // auto | light | dark
         subscribed: false,
         lastSyncAt: null,        // ISO string — last mini-lesson queue upload
+        signedInAs: '',          // landing-gate pass: email, or 'local' for offline/dev skip
         syncKey: '',             // cross-device progress sync key (v3)
         syncEnabled: false,
         lastPushAt: null,        // ISO string — last saveProgress
@@ -122,6 +123,7 @@ window.FableProgress = (function () {
       if (typeof s.lastSyncAt === 'string') fresh.settings.lastSyncAt = s.lastSyncAt;
       if (typeof s.lastPushAt === 'string') fresh.settings.lastPushAt = s.lastPushAt;
       if (typeof s.lastPullAt === 'string') fresh.settings.lastPullAt = s.lastPullAt;
+      if (typeof s.signedInAs === 'string') fresh.settings.signedInAs = s.signedInAs;
       if (typeof s.syncKey === 'string') fresh.settings.syncKey = normalizeKey(s.syncKey);
       fresh.settings.syncEnabled = !!s.syncEnabled;
       fresh.settings.subscribed = !!s.subscribed;
@@ -467,7 +469,7 @@ window.FableProgress = (function () {
 
   /* Settings that identify THIS device / THIS account and must never be taken from the
      cloud blob, or a stale device could clobber the endpoint you just typed in. */
-  var LOCAL_ONLY_SETTINGS = ['email', 'scriptUrl', 'syncKey', 'lastPushAt', 'lastPullAt', 'lastSyncAt'];
+  var LOCAL_ONLY_SETTINGS = ['email', 'scriptUrl', 'syncKey', 'signedInAs', 'lastPushAt', 'lastPullAt', 'lastSyncAt'];
 
   function laterIso(a, b) {
     if (!a) return b || null;

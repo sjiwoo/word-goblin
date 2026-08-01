@@ -31,7 +31,14 @@ audio, offline support, cross-device progress sync, and a free daily mini-lesson
 ## Using it
 
 Open the live URL, or open `index.html` straight from disk — the app is 100% static and
-works offline (no build step, no CDN, no server). On a phone, open the URL once and
+works offline (no build step, no CDN, no server).
+
+On a new device the app opens with a **sign-in landing page**: enter your Apps Script URL
+and press *Sign in with Google* — your progress, sync key and settings all fill in from
+that one click. (Where sign-in is impossible — opened from disk, offline, or the backend
+isn't set up — a "continue on this device" link appears instead, so the app never locks
+you out. Once a device is signed in it goes straight to the app, including offline.)
+Editing `js/config.js` with your script URL saves even that pasting step. On a phone, open the URL once and
 *Add to Home Screen*: it installs as an app and works offline afterwards.
 
 Audio uses your device's built-in Korean/Chinese voices (Web Speech API) — click any

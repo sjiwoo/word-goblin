@@ -90,6 +90,15 @@ and token verification in the user's own Apps Script:
   first login) plus subscription state. Owner enables it by pasting their OAuth client ID
   into `setupGoogleLogin()` and running it once (EMAIL-SETUP.md has the Cloud Console
   walkthrough). The client ID is public; all data access still goes through the sync key.
+- Landing gate (app.js `showLanding`): boot overlays a full-screen sign-in page until
+  `settings.signedInAs` is set (device-local — in `LOCAL_ONLY_SETTINGS` and coerce(), never
+  adopted from the cloud). Strict when sign-in is possible (https + backend `?action=config`
+  returns a client ID); where impossible (file://, offline, unconfigured backend) it shows a
+  "continue on this device" skip that stores `signedInAs:'local'`. Signing in from either the
+  landing or the Settings panel sets `signedInAs` via the shared `completeGoogleLogin()`;
+  "Sign out on this device" (Settings → Cross-device sync) clears it and reloads.
+  `js/config.js` (`window.WORDGOBLIN_DEFAULTS.scriptUrl`) optionally pre-fills the script
+  URL — public by design, ships empty.
 
 ## Data contract (curriculum files)
 

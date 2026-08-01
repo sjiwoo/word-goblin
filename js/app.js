@@ -1274,6 +1274,73 @@
     for (var i = 0; i < q.length; i++) { try { q[i](ok); } catch (e) {} }
   }
 
+  /* GIS allows one initialize() per page; both the landing gate and the Settings panel
+     render buttons, so a single dispatcher routes credentials to whichever asked last. */
+  var gisInited = false;
+  var gisHandler = null;
+
+  /** renderGoogleButton(clientId, host, onCredential, cb(ok)) — official button into host. */
+  function renderGoogleButton(clientId, host, onCredential, cb) {
+    loadGsi(function (ok) {
+      if (!ok) { cb(false); return; }
+      try {
+        if (!gisInited) {
+          window.google.accounts.id.initialize({
+            client_id: clientId,
+            callback: function (resp) { if (gisHandler) gisHandler(resp); }
+          });
+          gisInited = true;
+        }
+        gisHandler = onCredential;
+        U.clear(host);
+        window.google.accounts.id.renderButton(host, { theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with' });
+        cb(true);
+      } catch (e) { cb(false); }
+    });
+  }
+
+  /** True when Google sign-in could work at all in this environment. */
+  function gsiPossibleHere() {
+    var proto = window.location.protocol;
+    return proto === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  }
+
+  /**
+   * completeGoogleLogin(resp, status, done) — verify the GIS credential with the user's
+   * Apps Script, adopt {email, syncKey, subscription}, mark the device signed in, sync.
+   * status(msg, kind) paints progress; done(ok) fires after the sync round-trip.
+   */
+  function completeGoogleLogin(resp, status, done) {
+    if (!resp || !resp.credential) { status('Google sign-in returned no credential. Try again.', 'bad'); done(false); return; }
+    status('Verifying your Google sign-in…', '');
+    postJson(P.settings.scriptUrl, { action: 'googleLogin', idToken: resp.credential }, function (res) {
+      if (res.ok && res.data && res.data.email && res.data.key) {
+        var patch = {
+          email: String(res.data.email),
+          syncKey: P.normalizeKey(res.data.key),
+          syncEnabled: true,
+          signedInAs: String(res.data.email)
+        };
+        if (res.data.subscribed) {
+          patch.subscribed = true;
+          if (U.isArr(res.data.languages)) {
+            var langs = res.data.languages.filter(function (l) { return LANGS.indexOf(l) !== -1; });
+            if (langs.length) patch.activeLangs = langs;
+          }
+        }
+        P.setSettings(patch);
+        status('Signed in as ' + res.data.email + ' — syncing…', 'ok');
+        syncNow(function () { done(true); });
+      } else if (res.ok) {
+        status(describeSyncError('unreadable'), 'bad');
+        done(false);
+      } else {
+        status(res.error || 'Google sign-in failed.', 'bad');
+        done(false);
+      }
+    });
+  }
+
   function cardSync() {
     var p = panel('Cross-device sync',
       'Study on your laptop, carry on from your phone. Your progress AND your settings — theme, ' +
@@ -1293,40 +1360,20 @@
     gBox.appendChild(gNote);
     p.appendChild(gBox);
 
-    function onGoogleCredential(resp) {
-      var s = P.settings;
-      if (!resp || !resp.credential) { setSyncMsg('Google sign-in returned no credential. Try again.', 'bad'); return; }
-      setSyncMsg('Verifying your Google sign-in…', '');
-      postJson(s.scriptUrl, { action: 'googleLogin', idToken: resp.credential }, function (res) {
-        if (res.ok && res.data && res.data.email && res.data.key) {
-          var patch = {
-            email: String(res.data.email),
-            syncKey: P.normalizeKey(res.data.key),
-            syncEnabled: true
-          };
-          if (res.data.subscribed) {
-            patch.subscribed = true;
-            if (U.isArr(res.data.languages)) {
-              var langs = res.data.languages.filter(function (l) { return LANGS.indexOf(l) !== -1; });
-              if (langs.length) patch.activeLangs = langs;
-            }
-          }
-          P.setSettings(patch);
-          setSyncMsg('Signed in as ' + res.data.email + ' — syncing…', 'ok');
-          syncNow(function () { render(); });
-        } else if (res.ok) {
-          // Delivered but unreadable reply — same deployment problem as any other sync call.
-          setSyncMsg(describeSyncError('unreadable'), 'bad');
-        } else {
-          setSyncMsg(res.error || 'Google sign-in failed.', 'bad');
-        }
-      });
+    var s0 = P.settings;
+    if (s0.signedInAs && s0.signedInAs !== 'local') {
+      var who = el('div', 'signed-row');
+      who.appendChild(el('span', 'signed-as', 'Signed in with Google as ' + s0.signedInAs));
+      who.appendChild(U.button('Sign out on this device', 'btn btn-quiet btn-sm', function () {
+        P.setSettings({ signedInAs: '' });
+        window.location.reload();      // back to the landing gate
+      }, { title: 'Progress and settings stay saved; only the sign-in is forgotten here' }));
+      gBox.appendChild(who);
     }
 
     function initGoogleButton() {
       var s = P.settings;
-      var proto = window.location.protocol;
-      if (proto !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      if (!gsiPossibleHere()) {
         gNote.textContent = 'Google sign-in needs the hosted (https) version of the app; the manual key below works everywhere.';
         return;
       }
@@ -1343,16 +1390,12 @@
             'in your Apps Script (EMAIL-SETUP.md walks through it). The manual key below works regardless.';
           return;
         }
-        loadGsi(function (ok) {
-          if (!ok) { gNote.textContent = 'Could not load Google sign-in (offline?). Use the manual key below.'; return; }
-          try {
-            window.google.accounts.id.initialize({ client_id: cid, callback: onGoogleCredential });
-            U.clear(gHost);
-            window.google.accounts.id.renderButton(gHost, { theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with' });
-            gNote.textContent = 'One click proves your address, fetches your sync key, and syncs everything — settings included.';
-          } catch (e) {
-            gNote.textContent = 'Google sign-in could not start in this browser. Use the manual key below.';
-          }
+        renderGoogleButton(cid, gHost, function (resp) {
+          completeGoogleLogin(resp, setSyncMsg, function (ok) { if (ok) render(); });
+        }, function (ok) {
+          gNote.textContent = ok
+            ? 'One click proves your address, fetches your sync key, and syncs everything — settings included.'
+            : 'Could not load Google sign-in (offline?). Use the manual key below.';
         });
       })['catch'](function () {
         gNote.textContent = 'Could not reach the Apps Script to check for Google sign-in. The manual key below still works.';
@@ -1664,6 +1707,127 @@
     window.scrollTo(0, 0);
   }
 
+  /* ========================================================== landing gate
+   * First thing a new device sees: a full-screen cover asking for Google sign-in.
+   * The gate is strict whenever sign-in is actually possible (hosted app + backend with
+   * a client ID). Where it cannot work — file://, offline, backend not set up — a
+   * "continue on this device" escape appears instead of bricking the app. Once passed
+   * (signedInAs in settings, device-local), boots go straight in, so the installed PWA
+   * still opens instantly offline.
+   */
+
+  function showLanding() {
+    var ov = el('div', 'landing');
+    ov.setAttribute('role', 'dialog');
+    ov.setAttribute('aria-label', 'Sign in to Word Goblin');
+    var inner = el('div', 'landing-inner');
+
+    var hero = el('div', 'landing-hero');
+    hero.appendChild(el('div', 'landing-mark', '書'));
+    hero.appendChild(el('h1', 'landing-title', 'Word Goblin'));
+    var nat = el('p', 'landing-native');
+    var ko = el('span', 'native landing-ko', '한국어');
+    A.attach(ko, '한국어', 'korean', { icon: false });
+    var zh = el('span', 'native landing-zh', '中文');
+    A.attach(zh, '中文', 'chinese', { icon: false });
+    nat.appendChild(ko);
+    nat.appendChild(el('span', 'landing-dot', '·'));
+    nat.appendChild(zh);
+    hero.appendChild(nat);
+    hero.appendChild(el('p', 'landing-sub',
+      'A textbook-grade Korean and Mandarin course with the etymology of every word. ' +
+      'Sign in with Google and your progress, settings and daily mini-lessons follow you everywhere.'));
+    inner.appendChild(hero);
+
+    var card = el('div', 'landing-card');
+    var gHost = el('div', 'gsi-btn landing-gsi');
+    var note = el('p', 'field-hint landing-note');
+    var status = el('p', 'form-status');
+    status.setAttribute('role', 'status');
+    card.appendChild(gHost);
+    card.appendChild(note);
+    card.appendChild(status);
+
+    var defaults = window.WORDGOBLIN_DEFAULTS || {};
+    var urlWrap = el('div', 'field landing-url');
+    var urlLabel = el('label', 'field-label', 'Apps Script web-app URL');
+    urlLabel.setAttribute('for', 'landing-scripturl');
+    var url = el('input', 'input');
+    url.type = 'url';
+    url.id = 'landing-scripturl';
+    url.placeholder = 'https://script.google.com/macros/s/…/exec';
+    url.value = P.settings.scriptUrl || U.str(defaults.scriptUrl) || '';
+    urlWrap.appendChild(urlLabel);
+    urlWrap.appendChild(url);
+    urlWrap.appendChild(U.para('Your personal backend from EMAIL-SETUP.md — sign-in, sync and the daily e-mail all live there.', 'field-hint'));
+    card.appendChild(urlWrap);
+
+    var skip = U.button('Continue on this device without signing in →', 'landing-skip', function () {
+      P.setSettings({ signedInAs: 'local' });
+      dismiss();
+    });
+    skip.hidden = true;
+    card.appendChild(skip);
+
+    inner.appendChild(card);
+    ov.appendChild(inner);
+
+    function statusFn(msg, kind) {
+      status.textContent = msg;
+      status.className = 'form-status ' + (kind || '');
+    }
+
+    function dismiss() {
+      ov.classList.add('leaving');
+      setTimeout(function () {
+        if (ov.parentNode) ov.parentNode.removeChild(ov);
+        render();                        // a fresh sign-in may have merged cloud data
+      }, 320);
+    }
+
+    function tryInit() {
+      var u = url.value.trim();
+      if (u !== P.settings.scriptUrl) P.setSettings({ scriptUrl: u });
+      U.clear(gHost);
+      if (!gsiPossibleHere()) {
+        note.textContent = 'Google sign-in needs the hosted (https) app — this copy is running from disk.';
+        skip.hidden = false;
+        return;
+      }
+      if (!u) {
+        note.textContent = 'Paste your Apps Script URL below to sign in — or set one up first with EMAIL-SETUP.md.';
+        skip.hidden = false;
+        return;
+      }
+      note.textContent = 'Checking your backend…';
+      skip.hidden = true;
+      var cfgUrl = u + (u.indexOf('?') === -1 ? '?' : '&') + 'action=config';
+      window.fetch(cfgUrl).then(function (r) { return r.json(); }).then(function (cfg) {
+        var cid = cfg && cfg.googleClientId;
+        if (!cid) {
+          note.textContent = 'This backend does not have Google sign-in enabled yet — run setupGoogleLogin() in the Apps Script editor (EMAIL-SETUP.md, "One-click Google sign-in").';
+          skip.hidden = false;
+          return;
+        }
+        renderGoogleButton(cid, gHost, function (resp) {
+          completeGoogleLogin(resp, statusFn, function (ok) { if (ok) dismiss(); });
+        }, function (ok) {
+          note.textContent = ok
+            ? 'Sign in with the Google account whose e-mail you use for Word Goblin.'
+            : 'Could not load Google sign-in — check your connection.';
+          skip.hidden = ok;
+        });
+      })['catch'](function () {
+        note.textContent = 'Could not reach that backend. Check the URL (it should end in /exec) and your connection.';
+        skip.hidden = false;
+      });
+    }
+
+    url.addEventListener('change', tryInit);
+    tryInit();
+    document.body.appendChild(ov);
+  }
+
   /* ================================================================== boot */
 
   /**
@@ -1720,6 +1884,10 @@
     });
 
     registerServiceWorker();
+
+    // Landing gate: until this device has signed in (or explicitly skipped where sign-in
+    // is impossible), a full-screen cover sits over the app.
+    if (!P.settings.signedInAs) showLanding();
 
     // Voices arrive asynchronously; refresh the Settings hints when they do.
     A.onReady(function () {
