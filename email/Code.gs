@@ -113,6 +113,16 @@ function doGet(e) {
   migrateLegacy_();
 
   var params = (e && e.parameter) ? e.parameter : {};
+
+  // `?action=config` — public, non-secret client configuration (the OAuth client ID is
+  // public by design). The app uses this to decide whether to show "Sign in with Google".
+  if (String(params.action || '').toLowerCase() === 'config') {
+    return jsonOut_({
+      ok: true,
+      googleClientId: String(PropertiesService.getScriptProperties().getProperty('googleClientId') || '')
+    });
+  }
+
   if (String(params.action || '').toLowerCase() === 'loadprogress') {
     var email = normalizeEmail_(params.email);
     if (!isValidEmail_(email)) {
@@ -189,6 +199,11 @@ function doPost(e) {
     if (!body) return jsonOut_({ ok: false, error: 'Could not read request body as JSON.' });
 
     var action = String(body.action || '').toLowerCase();
+
+    // Google login carries no email of its own — the address comes out of the verified
+    // ID token — so it is dispatched before the email check.
+    if (action === 'googlelogin') return googleLogin_(body.idToken);
+
     var email = normalizeEmail_(body.email);
 
     if (!isValidEmail_(email)) {
@@ -350,6 +365,105 @@ function badKey_(email, action) {
 function normalizeKey_(value) {
   var key = String(value == null ? '' : value).trim();
   return key.length > MAX_KEY_CHARS ? key.slice(0, MAX_KEY_CHARS) : key;
+}
+
+/* ==================================================================
+   GOOGLE SIGN-IN (contract v4, optional)
+
+   The app renders a "Sign in with Google" button (Google Identity Services, in the
+   browser). The resulting ID token is posted here; this script verifies it against
+   Google's tokeninfo endpoint and, for the proven address, returns the stored sync
+   key (creating one on first login). One click on a new device replaces typing the
+   email + sync key by hand. Set-up: run setupGoogleLogin() once with your OAuth
+   client ID pasted in — see EMAIL-SETUP.md.
+   ================================================================== */
+
+/**
+ * ONE-TIME SETUP: paste your OAuth client ID between the quotes and run this once.
+ * Create the ID at console.cloud.google.com → APIs & Services → Credentials →
+ * Create credentials → OAuth client ID → Web application, with your app's origin
+ * (e.g. https://sjiwoo.github.io) under "Authorized JavaScript origins".
+ */
+function setupGoogleLogin() {
+  var CLIENT_ID = 'PASTE-YOUR-CLIENT-ID-HERE.apps.googleusercontent.com';
+  if (CLIENT_ID.indexOf('PASTE-YOUR') === 0) {
+    throw new Error('Edit setupGoogleLogin() first: replace the placeholder with your real OAuth client ID, then run it again.');
+  }
+  PropertiesService.getScriptProperties().setProperty('googleClientId', CLIENT_ID);
+  Logger.log('Google sign-in enabled for client ID: ' + CLIENT_ID);
+}
+
+/**
+ * Verifies a Google ID token and returns { email, key } for the proven address.
+ * Verification is delegated to Google's own tokeninfo endpoint (it checks the
+ * signature and expiry); we additionally require our audience, a Google issuer,
+ * and a verified email address.
+ */
+function googleLogin_(idToken) {
+  var clientId = String(PropertiesService.getScriptProperties().getProperty('googleClientId') || '');
+  if (!clientId) {
+    return jsonOut_({ ok: false, error: 'Google sign-in is not enabled on this backend yet — run setupGoogleLogin() in the Apps Script editor (see EMAIL-SETUP.md).' });
+  }
+  var token = String(idToken == null ? '' : idToken);
+  if (!token) return jsonOut_({ ok: false, error: 'The Google credential was missing. Try signing in again.' });
+
+  var payload = null;
+  try {
+    var res = UrlFetchApp.fetch(
+      'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
+      { muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) payload = JSON.parse(res.getContentText());
+  } catch (err) {
+    Logger.log('googleLogin tokeninfo error: ' + err);
+    payload = null;
+  }
+
+  if (!payload || payload.aud !== clientId ||
+      (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') ||
+      String(payload.email_verified) !== 'true') {
+    Logger.log('googleLogin rejected: ' + (payload ? 'aud/iss/verification mismatch' : 'token not verifiable'));
+    return jsonOut_({ ok: false, error: 'Google sign-in could not be verified. Try again.' });
+  }
+
+  var email = normalizeEmail_(payload.email);
+  if (!isValidEmail_(email)) {
+    return jsonOut_({ ok: false, error: 'Google returned an unusable email address.' });
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var key = props.getProperty(keyKey_(email));
+    if (!key) {
+      key = generateKey_();
+      props.setProperty(keyKey_(email), key);
+      Logger.log('Sync key created via Google sign-in for ' + email);
+    } else {
+      Logger.log('Google sign-in: existing sync key returned to ' + email);
+    }
+    var sub = readSub_(email);
+    return jsonOut_({
+      ok: true,
+      action: 'googleLogin',
+      email: email,
+      key: key,
+      subscribed: !!sub,
+      languages: (sub && sub.languages) ? sub.languages : []
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Same alphabet the app uses (Crockford base32, no I/L/O/U) so keys stay typeable. */
+function generateKey_() {
+  var alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  var out = '';
+  for (var i = 0; i < 12; i++) {
+    out += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  }
+  return out;
 }
 
 /* ==================================================================

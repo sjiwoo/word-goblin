@@ -51,6 +51,9 @@ Both are powered by one small Google Apps Script you deploy in your own Google a
 - Your progress syncs across devices: generate a **sync key** on one device, type it on
   the other, and studying on your phone and desktop merges cleanly (most-progress-wins,
   never clobbers).
+- Optional **Sign in with Google**: after a one-time OAuth-client setup (see
+  EMAIL-SETUP.md), a Google button in Settings replaces the typing — one click proves
+  your address, fetches your sync key, and syncs settings and progress.
 
 Everything stays in your own Google account; nothing is sent anywhere else.
 

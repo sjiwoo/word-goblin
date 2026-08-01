@@ -186,6 +186,48 @@ random password the app generates for you.
 
 ---
 
+## One-click Google sign-in (optional)
+
+Instead of typing your email and sync key on every device, you can add a **Sign in with
+Google** button to the app's sync panel: one click proves you own the address, fetches your
+sync key from the script (creating one on first login), and syncs everything. Setup is a
+one-time ten minutes:
+
+**A. Create an OAuth client ID** (free, in any Google Cloud project)
+
+1. Go to **console.cloud.google.com** → create a project if you have none (name it anything).
+2. **APIs & Services → OAuth consent screen**: choose **External**, fill in just the app name
+   ("Word Goblin") and your email, save through the steps. You can leave it in *Testing* and
+   add yourself under **Test users** — that is enough for personal use.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
+   Application type **Web application**.
+4. Under **Authorized JavaScript origins** add the origin you open the app from:
+   `https://sjiwoo.github.io` (no path). Add `http://localhost:8123` too if you ever test
+   locally.
+5. Create, and copy the **Client ID** (ends in `.apps.googleusercontent.com`).
+
+**B. Tell your script about it**
+
+6. In the Apps Script editor, open `Code.gs`, find **`setupGoogleLogin`**, paste your client
+   ID over the placeholder string, select `setupGoogleLogin` in the function dropdown, and
+   click **▶ Run** once.
+7. If you edited the code (updating to a newer Code.gs), redeploy: **Deploy → Manage
+   deployments → ✏️ → New version → Deploy** (the URL stays the same).
+
+That's it. Open the app's **Settings → Cross-device sync** on any device: with the Apps
+Script URL filled in, the Google button appears there automatically. The button needs the
+hosted (https) app; the manual sync key keeps working everywhere, with or without this.
+
+How it works (developer contract v4): the app posts
+`{"action":"googleLogin","idToken":"<Google ID token>"}`; the script verifies the token
+against `https://oauth2.googleapis.com/tokeninfo` (audience must equal the stored
+`googleClientId` script property, issuer must be Google, email must be verified) and replies
+`{"ok":true,"email":…,"key":…,"subscribed":…,"languages":[…]}`. `GET ?action=config` returns
+`{"ok":true,"googleClientId":…}` so the app knows whether to show the button. The client ID
+is public by design; the sync key still gates all data access.
+
+---
+
 ## Why the warning screens are safe
 
 Google shows "Google hasn't verified this app" for *every* script that has not gone through

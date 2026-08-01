@@ -72,6 +72,25 @@ the browser** (the API is CORS-open) — the app stays serverless. Contract poin
 - sw.js never intercepts the API call (cross-origin), so offline mode simply reports
   "can't chat offline".
 
+### Google sign-in (contract v4, optional)
+
+One-click identity on top of the v3 sync key, using Google Identity Services in the browser
+and token verification in the user's own Apps Script:
+
+- Client (app.js): the Cross-device sync panel `GET`s `<scriptUrl>?action=config`; if it
+  returns a `googleClientId`, the GIS library (`accounts.google.com/gsi/client`) is loaded
+  on demand and `renderButton` draws the official button. The credential callback POSTs
+  `{action:'googleLogin', idToken}` and on success adopts `{email, syncKey, syncEnabled,
+  subscribed?, activeLangs?}` then runs `syncNow()` + re-render. https-only; file:// and
+  un-configured backends fall back to the manual key with an explanatory hint.
+- Server (Code.gs): `googleLogin_` verifies the ID token via
+  `https://oauth2.googleapis.com/tokeninfo` — audience must equal the `googleClientId`
+  script property, issuer must be accounts.google.com, `email_verified` must be true —
+  then returns the stored `key:<email>` (creating a server-generated Crockford key on
+  first login) plus subscription state. Owner enables it by pasting their OAuth client ID
+  into `setupGoogleLogin()` and running it once (EMAIL-SETUP.md has the Cloud Console
+  walkthrough). The client ID is public; all data access still goes through the sync key.
+
 ## Data contract (curriculum files)
 
 Every data file is a plain script with this exact envelope:

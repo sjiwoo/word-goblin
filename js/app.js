@@ -159,7 +159,7 @@
     var head = el('div', 'track-head');
     var titles = el('div', 'track-titles');
     var nat = el('div', 'track-native', meta.native);
-    A.attach(nat, meta.native, lang, { icon: false });
+    A.attach(nat, meta.native, lang);
     titles.appendChild(nat);
     titles.appendChild(el('h2', 'track-name', meta.name));
     titles.appendChild(el('p', 'track-tagline', meta.tagline));
@@ -254,7 +254,7 @@
     var t = el('div', 'map-titles');
     t.appendChild(el('h1', 'map-title', meta.name));
     var nat = el('div', 'map-native', meta.native);
-    A.attach(nat, meta.native, lang, { icon: false });
+    A.attach(nat, meta.native, lang);
     t.appendChild(nat);
     t.appendChild(el('p', 'map-sub', meta.tagline + ' Every unit is open from the start.'));
     head.appendChild(t);
@@ -478,8 +478,13 @@
 
       var front = el('div', 'flash-face flash-front');
       var term = el('div', 'flash-term', item.term);
+      A.attach(term, item.audio || item.term, lang);   // speaks without flipping (click is stopped)
       front.appendChild(term);
-      if (item.trad && item.trad !== item.term) front.appendChild(el('div', 'flash-trad', item.trad));
+      if (item.trad && item.trad !== item.term) {
+        var tradN = el('div', 'flash-trad', item.trad);
+        A.attach(tradN, item.trad, lang);
+        front.appendChild(tradN);
+      }
       front.appendChild(el('div', 'flash-hint', 'Tap to reveal'));
 
       var back = el('div', 'flash-face flash-back');
@@ -488,7 +493,9 @@
       if (item.pos) back.appendChild(el('span', 'chip chip-pos', item.pos));
       if (item.example && item.example.text) {
         var ex = el('div', 'flash-example');
-        ex.appendChild(el('div', 'flash-ex-text', item.example.text));
+        var exText = el('div', 'flash-ex-text', item.example.text);
+        A.attach(exText, item.example.text, lang);
+        ex.appendChild(exText);
         if (item.example.gloss) ex.appendChild(el('div', 'flash-ex-gloss', item.example.gloss));
         back.appendChild(ex);
       }
@@ -1246,6 +1253,27 @@
     xhr.send(body);
   }
 
+  /* Google Identity Services loader — fetched on demand, only over http(s), never cached
+     by the service worker (cross-origin). The app works fully without it. */
+  var gsiCallbacks = null;
+  function loadGsi(cb) {
+    if (window.google && window.google.accounts && window.google.accounts.id) { cb(true); return; }
+    if (gsiCallbacks) { gsiCallbacks.push(cb); return; }
+    gsiCallbacks = [cb];
+    var sc = document.createElement('script');
+    sc.src = 'https://accounts.google.com/gsi/client';
+    sc.async = true;
+    sc.defer = true;
+    sc.onload = function () { flushGsi(true); };
+    sc.onerror = function () { flushGsi(false); };
+    document.head.appendChild(sc);
+  }
+  function flushGsi(ok) {
+    var q = gsiCallbacks || [];
+    gsiCallbacks = null;
+    for (var i = 0; i < q.length; i++) { try { q[i](ok); } catch (e) {} }
+  }
+
   function cardSync() {
     var p = panel('Cross-device sync',
       'Study on your laptop, carry on from your phone. Your progress AND your settings — theme, ' +
@@ -1253,8 +1281,84 @@
       'under the same Apps Script endpoint and e-mail address as the mini-lesson above, protected ' +
       'by a sync key you choose. Generate a key here, then on your other device enter the Apps ' +
       'Script URL and e-mail above, type the same key, and press “Save & sync” — the rest of the ' +
-      'settings fill in from the cloud. Progress merges rather than overwrites: whichever device ' +
-      'did more of something wins.');
+      'settings fill in from the cloud. Or skip the typing: with your Apps Script URL set, ' +
+      '“Sign in with Google” proves the address and fetches the key in one click. Progress merges ' +
+      'rather than overwrites: whichever device did more of something wins.');
+
+    /* ---- one-click Google sign-in (appears when the backend has it enabled) ---- */
+    var gBox = el('div', 'gsi-box');
+    var gHost = el('div', 'gsi-btn');
+    var gNote = el('p', 'field-hint gsi-note');
+    gBox.appendChild(gHost);
+    gBox.appendChild(gNote);
+    p.appendChild(gBox);
+
+    function onGoogleCredential(resp) {
+      var s = P.settings;
+      if (!resp || !resp.credential) { setSyncMsg('Google sign-in returned no credential. Try again.', 'bad'); return; }
+      setSyncMsg('Verifying your Google sign-in…', '');
+      postJson(s.scriptUrl, { action: 'googleLogin', idToken: resp.credential }, function (res) {
+        if (res.ok && res.data && res.data.email && res.data.key) {
+          var patch = {
+            email: String(res.data.email),
+            syncKey: P.normalizeKey(res.data.key),
+            syncEnabled: true
+          };
+          if (res.data.subscribed) {
+            patch.subscribed = true;
+            if (U.isArr(res.data.languages)) {
+              var langs = res.data.languages.filter(function (l) { return LANGS.indexOf(l) !== -1; });
+              if (langs.length) patch.activeLangs = langs;
+            }
+          }
+          P.setSettings(patch);
+          setSyncMsg('Signed in as ' + res.data.email + ' — syncing…', 'ok');
+          syncNow(function () { render(); });
+        } else if (res.ok) {
+          // Delivered but unreadable reply — same deployment problem as any other sync call.
+          setSyncMsg(describeSyncError('unreadable'), 'bad');
+        } else {
+          setSyncMsg(res.error || 'Google sign-in failed.', 'bad');
+        }
+      });
+    }
+
+    function initGoogleButton() {
+      var s = P.settings;
+      var proto = window.location.protocol;
+      if (proto !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        gNote.textContent = 'Google sign-in needs the hosted (https) version of the app; the manual key below works everywhere.';
+        return;
+      }
+      if (!s.scriptUrl) {
+        gNote.textContent = 'Add your Apps Script URL above and Google sign-in appears here.';
+        return;
+      }
+      gNote.textContent = 'Checking this backend for Google sign-in…';
+      var cfgUrl = s.scriptUrl + (s.scriptUrl.indexOf('?') === -1 ? '?' : '&') + 'action=config';
+      window.fetch(cfgUrl).then(function (r) { return r.json(); }).then(function (cfg) {
+        var cid = cfg && cfg.googleClientId;
+        if (!cid) {
+          gNote.textContent = 'One-click sign-in unlocks after a one-time backend step: run setupGoogleLogin() ' +
+            'in your Apps Script (EMAIL-SETUP.md walks through it). The manual key below works regardless.';
+          return;
+        }
+        loadGsi(function (ok) {
+          if (!ok) { gNote.textContent = 'Could not load Google sign-in (offline?). Use the manual key below.'; return; }
+          try {
+            window.google.accounts.id.initialize({ client_id: cid, callback: onGoogleCredential });
+            U.clear(gHost);
+            window.google.accounts.id.renderButton(gHost, { theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with' });
+            gNote.textContent = 'One click proves your address, fetches your sync key, and syncs everything — settings included.';
+          } catch (e) {
+            gNote.textContent = 'Google sign-in could not start in this browser. Use the manual key below.';
+          }
+        });
+      })['catch'](function () {
+        gNote.textContent = 'Could not reach the Apps Script to check for Google sign-in. The manual key below still works.';
+      });
+    }
+    initGoogleButton();
 
     var keyRow = el('div', 'key-row');
     var key = el('input', 'input key-input');

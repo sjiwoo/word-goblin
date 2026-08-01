@@ -288,7 +288,7 @@
         if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
         var lang = RE_HANGUL.test(m[0]) ? 'korean' : 'chinese';
         var span = el('span', 'tutor-say', m[0]);
-        A.attach(span, m[0], lang, { icon: false });
+        A.attach(span, m[0], lang);
         frag.appendChild(span);
         last = m.index + m[0].length;
       }
@@ -504,6 +504,20 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && open) togglePanel(false);
     });
+
+    /* On phones the on-screen keyboard covers position:fixed elements; ride the visual
+       viewport so the input stays visible while typing. */
+    if (window.visualViewport) {
+      var vv = window.visualViewport;
+      var fitPanel = function () {
+        if (!open) { panel.style.bottom = ''; return; }
+        var covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        panel.style.bottom = covered > 1 ? covered + 'px' : '';
+        if (covered > 1) scrollDown();
+      };
+      vv.addEventListener('resize', fitPanel);
+      vv.addEventListener('scroll', fitPanel);
+    }
   }
 
   /* ======================================================== settings panel */

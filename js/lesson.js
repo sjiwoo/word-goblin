@@ -484,7 +484,9 @@ window.FableLesson = (function () {
     }
     termWrap.appendChild(termNode);
     if (item.trad && item.trad !== item.term) {
-      termWrap.appendChild(el('div', 'vcard-trad', '傳統 ' + item.trad));
+      var tradNode = el('div', 'vcard-trad', '傳統 ' + item.trad);
+      window.FableAudio.attach(tradNode, item.trad, lang);
+      termWrap.appendChild(tradNode);
     }
     top.appendChild(termWrap);
 
