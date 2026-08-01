@@ -1294,9 +1294,12 @@
     for (var i = 0; i < q.length; i++) { try { q[i](ok); } catch (e) {} }
   }
 
-  /* GIS allows one initialize() per page; both the landing gate and the Settings panel
-     render buttons, so a single dispatcher routes credentials to whichever asked last. */
-  var gisInited = false;
+  /* Both the landing gate and the Settings panel render buttons, so a single dispatcher
+     routes credentials to whichever asked last. initialize() binds the client ID, and it
+     must be re-run whenever that ID changes — otherwise a page that initialized with a
+     stale ID keeps minting tokens for it, and the backend rejects every one of them as
+     an audience mismatch until a full reload. */
+  var gisClientId = '';
   var gisHandler = null;
 
   /** renderGoogleButton(clientId, host, onCredential, cb(ok)) — official button into host. */
@@ -1304,12 +1307,12 @@
     loadGsi(function (ok) {
       if (!ok) { cb(false); return; }
       try {
-        if (!gisInited) {
+        if (gisClientId !== clientId) {
           window.google.accounts.id.initialize({
             client_id: clientId,
             callback: function (resp) { if (gisHandler) gisHandler(resp); }
           });
-          gisInited = true;
+          gisClientId = clientId;
         }
         gisHandler = onCredential;
         U.clear(host);
@@ -1359,7 +1362,15 @@
         status(describeSyncError('unreadable'), 'bad');
         done(false);
       } else {
-        status(res.error || 'Google sign-in failed.', 'bad');
+        var msg = res.error || 'Google sign-in failed.';
+        // A client-ID mismatch is often just a stale page: this tab bound its Google button
+        // to an ID the backend has since changed. Say so before sending anyone to the editor.
+        if (/client ID|could not be verified|verify/i.test(msg)) {
+          msg += ' If you just changed the backend’s client ID, reload this page fully ' +
+            '(Ctrl+Shift+R, or Cmd+Shift+R) and sign in again — this tab is still using the old one.';
+        }
+        status(msg, 'bad');
+        if (window.console) console.warn('[WordGoblin] googleLogin refused:', res.error);
         done(false);
       }
     });

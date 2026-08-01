@@ -43,6 +43,13 @@ var REMINDER_HOUR = 8;
 /** Shown as the email sender name. */
 var SENDER_NAME = 'Word Goblin';
 
+/**
+ * Bumped whenever this file changes. Open `<your /exec URL>?action=diag` in a browser:
+ * if the codeVersion shown there is not this value, the DEPLOYMENT is still serving older
+ * code — save the file, then Deploy → Manage deployments → ✏️ → New version → Deploy.
+ */
+var CODE_VERSION = '2026-08-01-invite-v5';
+
 /** Where the app lives — used to build invite links. */
 var APP_URL = 'https://sjiwoo.github.io/word-goblin/';
 
@@ -134,6 +141,41 @@ function doGet(e) {
     return jsonOut_({ ok: true, googleClientId: storedClientId_() });
   }
 
+  // `?action=diag` — self-check you can read in any browser tab, so diagnosing a broken
+  // sign-in never depends on finding the Apps Script execution log. Counts and public
+  // values only: no addresses, no sync keys, no invite tokens.
+  if (String(params.action || '').toLowerCase() === 'diag') {
+    var rawId = PropertiesService.getScriptProperties().getProperty('googleClientId');
+    var cleanId = storedClientId_();
+    var allProps = PropertiesService.getScriptProperties().getKeys();
+    var memberCount = 0, inviteCount = 0;
+    for (var d = 0; d < allProps.length; d++) {
+      if (allProps[d].indexOf(ALLOW_PREFIX) === 0) memberCount++;
+      else if (allProps[d].indexOf(INVITE_PREFIX) === 0) inviteCount++;
+    }
+    var problems = [];
+    if (rawId === null) problems.push('No googleClientId is set — run setupGoogleLogin().');
+    else if (rawId !== cleanId) problems.push('The stored client ID had stray whitespace or quotes; this version compares it cleaned, so sign-in still works.');
+    if (cleanId && !/\.apps\.googleusercontent\.com$/.test(cleanId)) {
+      problems.push('The stored client ID does not end in .apps.googleusercontent.com — you may have pasted the client secret or the wrong field.');
+    }
+    if (!memberCount) problems.push('No members besides the script owner yet — invite someone with createInviteLink().');
+    return jsonOut_({
+      ok: true,
+      contract: 'v5',
+      codeVersion: CODE_VERSION,
+      googleLoginEnabled: !!cleanId,
+      googleClientId: cleanId,               // public by design
+      clientIdLooksValid: /\.apps\.googleusercontent\.com$/.test(cleanId),
+      members: memberCount,
+      openInvites: inviteCount,
+      triggerInstalled: hasDailyTrigger_(),
+      problems: problems,
+      hint: 'If sign-in fails with a client-ID mismatch, the googleClientId above is what this ' +
+            'backend expects. Reload the app with a hard refresh so the page picks it up.'
+    });
+  }
+
   if (String(params.action || '').toLowerCase() === 'loadprogress') {
     var email = normalizeEmail_(params.email);
     if (!isValidEmail_(email)) {
@@ -169,6 +211,7 @@ function doGet(e) {
     ok: true,
     service: 'Word Goblin email reminders',
     contract: 'v5 (invite-only + mini-lesson + progress sync)',
+    codeVersion: CODE_VERSION,
     status: 'running',
     subscribers: emails.length,
     queues: queueStats,
@@ -662,10 +705,14 @@ function inviteUrl_(token) {
  */
 function createInviteLink() {
   var token = generateToken_();
-  PropertiesService.getScriptProperties().setProperty(INVITE_PREFIX + token,
-    JSON.stringify({ createdAt: new Date().toISOString() }));
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(INVITE_PREFIX + token, JSON.stringify({ createdAt: new Date().toISOString() }));
   var link = inviteUrl_(token);
-  Logger.log('Single-use invite link (expires in ' + INVITE_TTL_DAYS + ' days if unused):\n\n' + link);
+  // Also parked in a property: if the execution log is hard to find, read it in
+  // ⚙ Project Settings → Script Properties → lastInviteLink. Never exposed by any endpoint.
+  props.setProperty('lastInviteLink', link);
+  Logger.log('Single-use invite link (expires in ' + INVITE_TTL_DAYS + ' days if unused):\n\n' + link +
+             '\n\n(Also saved as the "lastInviteLink" script property, in case this log is hard to find.)');
   return link;
 }
 

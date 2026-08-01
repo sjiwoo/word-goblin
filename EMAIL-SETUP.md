@@ -232,21 +232,30 @@ client ID is public by design; membership plus the sync key gate all data access
 
 ### If sign-in says "could not be verified"
 
-The backend rejected the Google credential. Work through this in order:
+**First, reload the app with a hard refresh** (Ctrl+Shift+R / Cmd+Shift+R) and try again. A
+page that loaded before you last changed the backend's client ID keeps using the old one,
+and every token it mints is then rejected. This is the most common cause by far.
 
-1. **Make sure the backend is running the current code.** Paste the latest `Code.gs`, press
-   **💾 Save**, then **Deploy → Manage deployments → ✏️ → New version → Deploy**. An unsaved
-   file or an un-redeployed project keeps serving the old code — this alone causes most
-   "I already fixed that" confusion.
-2. **Run `checkGoogleLogin()`** (function dropdown → ▶ Run → read the **Execution log**). It
-   prints the stored client ID between brackets so stray spaces, a newline, or pasted quotes
-   are visible, and warns if the value isn't a client ID at all (the client *secret* is a
-   common mis-paste).
-3. **Try signing in once more, then reopen the log.** A client-ID mismatch now prints the
-   token's audience and the stored value on adjacent lines — if they differ, run
-   `setupGoogleLogin()` with the "token audience" value and redeploy.
-4. If the log instead shows an HTTP code from tokeninfo, the credential had expired: reload
-   the app and sign in again.
+If it still fails, **open `<your /exec URL>?action=diag` in a browser tab** — a plain JSON
+self-check that needs no editor and no execution log:
+
+- `codeVersion` — if this is not the value of `CODE_VERSION` at the top of your `Code.gs`,
+  the deployment is still serving **older code**. Save the file, then
+  **Deploy → Manage deployments → ✏️ → New version → Deploy**.
+- `googleClientId` — what this backend expects. It must match the client ID in
+  console.cloud.google.com → Credentials. If it doesn't, fix it with `setupGoogleLogin()`.
+- `clientIdLooksValid` — `false` means the value isn't a client ID at all (pasting the
+  client *secret* is the usual mix-up).
+- `problems` — a plain-English list of anything detected.
+
+Only if those all look right do you need the editor: run **`checkGoogleLogin()`**, sign in
+once more, and read the **Execution log** — a mismatch prints the token's audience next to
+the stored value. An HTTP code there instead means the credential expired; sign in again.
+
+**Can't find the execution log?** In the editor it slides up from the bottom after a run;
+if it's closed, use the ⏱ **Executions** icon in the left sidebar and click the newest row
+to expand it. `createInviteLink()` also saves its link as the `lastInviteLink` script
+property (⚙ **Project Settings → Script Properties**), so you can read it without the log.
 
 ## Members & invites
 
