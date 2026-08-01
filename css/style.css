@@ -541,6 +541,24 @@ input, textarea, button, select { font: inherit; color: inherit; }
 .unit-progress-label { font-size: .8rem; color: var(--ink-3); display: block; margin-bottom: .4rem; }
 .unit-nav { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: space-between; }
 
+/* ---- one-step-at-a-time footer: every section ends with the NEXT section ---- */
+.step-nav { margin-top: 1.1rem; }
+.step-next {
+  display: flex; width: 100%; text-align: left;
+  border: 1px solid var(--rule-2); border-radius: var(--r);
+  background: var(--card-2); color: var(--ink); cursor: pointer;
+  padding: .95rem 1.15rem; text-decoration: none;
+  box-shadow: var(--shadow-1);
+  transition: border-color var(--t), box-shadow var(--t), transform var(--t);
+}
+.step-next:hover { border-color: var(--accent); box-shadow: var(--shadow-2); transform: translateY(-1px); }
+.step-inner { display: flex; align-items: center; gap: 1rem; width: 100%; }
+.step-text { display: flex; flex-direction: column; gap: .12rem; min-width: 0; }
+.step-kicker { font-size: .64rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+.step-label { font-weight: 600; font-size: 1.05rem; color: var(--accent); }
+.step-sub { font-size: .85rem; color: var(--ink-2); }
+.step-arrow { margin-left: auto; font-size: 1.4rem; color: var(--accent); flex: 0 0 auto; }
+
 /* ====================================================== 7. lesson bodies == */
 /* dialogue */
 .scene {
@@ -1009,6 +1027,133 @@ input, textarea, button, select { font: inherit; color: inherit; }
 @media (min-width: 1200px) {
   :root { --maxw: 1180px; }
 }
+
+/* ================================================= 13. story mode (mobile) ==
+   The phone lesson experience: a full-screen deck of story cards over the whole
+   app (z 50 — above the topbar at 40, below the tutor goblin at 59/60 so the
+   tutor stays one tap away mid-lesson). */
+
+body.story-open { overflow: hidden; }
+
+/* The story is fixed-position inside the animated .view; the view's entrance
+   transform would hijack the fixed positioning, so this view variant sits still. */
+.view.unitview-story { animation: none !important; opacity: 1; transform: none !important; }
+
+.story {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; flex-direction: column;
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(1200px 700px at 12% -8%, rgba(200,16,46,.045), transparent 62%),
+    radial-gradient(900px 600px at 96% 4%, rgba(31,79,163,.05), transparent 60%),
+    radial-gradient(700px 500px at 60% 110%, rgba(207,154,52,.06), transparent 65%);
+  color: var(--ink);
+  outline: none;
+  overscroll-behavior: contain;
+}
+
+.story-top { padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 6px; flex: 0 0 auto; }
+.story-segs { display: flex; gap: 4px; margin-bottom: 9px; }
+.story-seg {
+  flex: 1 1 0; height: 3px; border-radius: 999px;
+  background: var(--rule); overflow: hidden;
+}
+.story-seg i {
+  display: block; height: 100%; width: 0; border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width var(--t);
+}
+.story-head { display: flex; align-items: center; gap: .6rem; min-height: 2.1rem; }
+.story-head-label {
+  font-size: .82rem; font-weight: 600; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.story-head-count { font-family: var(--mono); font-size: .7rem; color: var(--ink-3); flex: 0 0 auto; }
+.story-close {
+  margin-left: auto; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.1rem; height: 2.1rem; border-radius: 50%;
+  border: 1px solid var(--rule-2); background: var(--card);
+  color: var(--ink-2); text-decoration: none; font-size: .95rem; line-height: 1;
+}
+
+.story-stage { flex: 1 1 auto; min-height: 0; position: relative; }
+.story-card {
+  position: absolute; inset: 0;
+  overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  padding: 1.1rem 1.15rem calc(4.8rem + env(safe-area-inset-bottom, 0px));
+}
+.story-card.in { animation: storyIn 200ms cubic-bezier(.22,.61,.36,1) both; }
+.story-card.in-back { animation: storyBack 200ms cubic-bezier(.22,.61,.36,1) both; }
+@keyframes storyIn   { from { opacity: 0; transform: translateX(18px); }  to { opacity: 1; transform: none; } }
+@keyframes storyBack { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+
+.story-sec-kicker {
+  font-size: .68rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: .9rem;
+}
+.story-sec-title { font-size: 1.35rem; margin-bottom: .7rem; }
+.story-unit-title { font-size: clamp(1.9rem, 8vw, 2.5rem); margin: .35rem 0 .15rem; }
+.story-intro .unit-subtitle { margin-bottom: .9rem; }
+
+.story-tapnote {
+  margin-top: 1.6rem; color: var(--ink-3); font-size: .85rem; text-align: center;
+  animation: tapPulse 1.8s ease-in-out infinite;
+}
+@keyframes tapPulse { 50% { opacity: .45; } }
+
+/* dialogue line cards: one big centred line per card */
+.story-line { display: flex; flex-direction: column; }
+.story-line-mid { margin: auto 0; text-align: center; padding: 1rem 0 3rem; }
+.story-speaker { color: var(--ink-3); font-size: .95rem; margin-bottom: 1.1rem; justify-content: center; }
+.story-term {
+  font-size: clamp(1.9rem, 8.5vw, 2.7rem); line-height: 1.4;
+  margin-bottom: 1rem; justify-content: center; flex-wrap: wrap;
+}
+.story-roman { color: var(--accent); font-size: 1.02rem; margin-bottom: .5rem; }
+.story-gloss { color: var(--ink-2); font-size: 1.05rem; }
+
+.story-vocab .vcard { border-radius: var(--r); }
+
+/* floating prev/next — centred so the tutor goblin keeps its corner */
+.story-nav {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  display: flex; gap: 10px; z-index: 2;
+}
+.story-nav-btn {
+  width: 2.7rem; height: 2.7rem; border-radius: 50%;
+  border: 1px solid var(--rule-2);
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  font-size: 1.35rem; line-height: 1; color: var(--ink-2); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow-2);
+  padding: 0 0 .15em;
+}
+@supports not (backdrop-filter: blur(4px)) { .story-nav-btn { background: var(--card); } }
+.story-nav-btn[disabled] { opacity: .3; cursor: default; }
+.story-nav-next { border-color: var(--accent); color: var(--accent); }
+
+/* section end cards */
+.story-end { display: flex; flex-direction: column; }
+.story-end-mid { margin: auto 0; text-align: center; padding-bottom: 1.5rem; }
+.story-end-mark {
+  width: 4.2rem; height: 4.2rem; margin: 0 auto 1.1rem; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2rem; color: var(--paper);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: var(--shadow-2);
+}
+.story-end-mark.todo {
+  background: var(--card-2); color: var(--ink-3);
+  border: 1px dashed var(--rule-2); box-shadow: none;
+}
+.story-end-title { font-size: 1.4rem; margin-bottom: .4rem; }
+.story-end-note { color: var(--ink-3); font-size: .9rem; margin: 0 auto 1.1rem; max-width: 34ch; }
+.story-end .step-nav { flex: 0 0 auto; }
+.story-end-links { display: flex; flex-direction: column; gap: .6rem; margin-top: 1.2rem; }
+.story-end-links .btn { width: 100%; }
 
 /* Print: fall back to plain paper. */
 @media print {

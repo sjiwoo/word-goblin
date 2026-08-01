@@ -360,6 +360,17 @@
     }
 
     pageTitle(u.title);
+
+    /* Phone-sized viewports get the full-screen story deck instead of tabs. */
+    if (window.matchMedia && window.matchMedia('(max-width: 680px)').matches) {
+      v.classList.add('unitview-story');
+      document.body.classList.add('story-open');
+      var shost = el('div', 'unit-host');
+      v.appendChild(shost);
+      window.FableLesson.renderStory(shost, lang, u, { startSection: sectionIndex });
+      return v;
+    }
+
     v.appendChild(crumb(lang, u.order === 0 ? 'Foundation' : 'Unit ' + u.order));
 
     var host = el('div', 'unit-host');
@@ -399,12 +410,8 @@
       rv.href = '#/' + meta.slug + '/review';
       rv.textContent = 'Review vocabulary';
       nav.appendChild(rv);
-      if (idx > -1 && idx < list.length - 1) {
-        var nx = el('a', 'btn btn-primary');
-        nx.href = '#/' + meta.slug + '/unit/' + encodeURIComponent(list[idx + 1].id);
-        nx.textContent = list[idx + 1].title + ' →';
-        nav.appendChild(nx);
-      }
+      /* No next-unit button here: progression is one section at a time via each
+       * panel's step-nav card; the next unit appears only after the last section. */
       footer.appendChild(nav);
     }
     paintUnitFooter();
@@ -1441,6 +1448,7 @@
   function render() {
     var parts = parseHash();
     var view;
+    document.body.classList.remove('story-open');   // story mode re-adds it if it mounts
     syncWatchers.length = 0;    // the old settings panel is about to be discarded
     try {
       if (!parts.length) {
@@ -1620,6 +1628,13 @@
     document.body.appendChild(footer);
 
     window.addEventListener('hashchange', render);
+    if (window.matchMedia) {
+      /* Crossing the phone breakpoint swaps the unit view between tabs and story mode. */
+      var storyMq = window.matchMedia('(max-width: 680px)');
+      var onStoryMq = function () { render(); };
+      if (storyMq.addEventListener) storyMq.addEventListener('change', onStoryMq);
+      else if (storyMq.addListener) storyMq.addListener(onStoryMq);
+    }
     if (!window.location.hash) window.location.hash = '#/';
     render();
 

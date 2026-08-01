@@ -242,6 +242,28 @@ Router (hash-based): `#/` home dashboard (both tracks side by side, pause toggle
 flashcard review of all seen vocab, same for `#/chinese`, `#/settings` (email signup,
 Apps Script URL, export/import, voice test). All units always clickable (requirement 8).
 
+### Lesson navigation (one step at a time + phone story mode)
+
+- **Tabbed unit view (viewports > 680px).** Every section panel ends with a `step-nav`
+  card pointing at the NEXT section of the same unit (Vocabulary 1 → Vocabulary 2);
+  only the last section's card points at the next unit (or review, at end of track).
+  The unit footer deliberately has NO next-unit button — progression is one section at
+  a time. Continuing via the card also marks a READING section (dialogue/vocab/grammar/
+  notes) complete; practice still completes only by finishing its quiz.
+- **Story mode (viewports ≤ 680px).** `FableLesson.renderStory(root, lang, unit,
+  {startSection})` replaces the tabbed view with a full-screen Instagram-story-style
+  deck (`viewUnit` picks per `matchMedia`, re-rendering when the breakpoint is
+  crossed; `body.story-open` locks page scroll and is cleared by every route render).
+  The unit is flattened into cards: intro → per-section runs (one card per dialogue
+  line / vocab word / grammar point, notes 2 paragraphs per card, the whole quiz as
+  one card) each closed by an end card. Navigation: tap right/left thirds of the
+  stage (guarded so links, buttons, speakables, details and the quiz never advance),
+  horizontal swipe, arrow keys, and floating ‹ › buttons. A segmented bar on top
+  fills per section; the current hash is `history.replaceState`d to the section index
+  so reloads resume nearby. Reading sections auto-mark complete when their end card
+  is reached; the end card carries the undo toggle. The story sits at z 50 — above
+  the topbar (40), below the tutor goblin (59/60), which stays usable mid-lesson.
+
 ## Email backend contract (Agent MAIL + Agent APP) — v6: daily MINI-LESSON, email-only
 
 The daily email is not a bare reminder: it is a personalized mini-lesson ("word of the day"
