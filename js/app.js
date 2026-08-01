@@ -914,8 +914,16 @@
         'Enter the key from your other device (or use a different e-mail address).';
     }
     if (err === 'unreadable') {
-      return 'Could not read the reply, so nothing was merged. Cross-device sync needs the ' +
-        'hosted (https) version of the app — opening index.html from disk can only push.';
+      if (window.location.protocol === 'file:') {
+        return 'Could not read the reply, so nothing was merged. Opening index.html from disk ' +
+          'can only push — use the hosted (https) version of the app for full sync.';
+      }
+      return 'The script replied, but the reply could not be read. This almost always means the ' +
+        'Apps Script deployment is not public: in script.google.com open Deploy → Manage ' +
+        'deployments → ✏️ Edit, set “Execute as: Me” and “Who has access: Anyone” (NOT “Anyone ' +
+        'with Google account”), press Deploy, and check the URL here ends in /exec (not /dev). ' +
+        'Quick test: open <your URL>?action=status in a private/incognito window — it should ' +
+        'show JSON, not a Google sign-in page.';
     }
     return err || 'Sync failed.';
   }
