@@ -1225,7 +1225,4 @@ input, textarea, button, select { font: inherit; color: inherit; }
 }
 .signed-as { font-size: .88rem; color: var(--ink-2); }
 
-/* passphrase unlock on the landing (encrypted backend URL in config.js) */
-.landing-pass-row { display: flex; gap: 8px; }
-.landing-pass-row .input { flex: 1; min-width: 0; }
-.landing-pass { margin-bottom: .4rem; }
+.landing-reveal { display: block; margin: .2rem auto .6rem; }

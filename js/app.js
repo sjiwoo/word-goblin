@@ -1315,8 +1315,12 @@
   function completeGoogleLogin(resp, status, done) {
     if (!resp || !resp.credential) { status('Google sign-in returned no credential. Try again.', 'bad'); done(false); return; }
     status('Verifying your Google sign-in…', '');
-    postJson(P.settings.scriptUrl, { action: 'googleLogin', idToken: resp.credential }, function (res) {
+    var body = { action: 'googleLogin', idToken: resp.credential };
+    var invite = pendingInvite();
+    if (invite) body.inviteToken = invite;
+    postJson(P.settings.scriptUrl, body, function (res) {
       if (res.ok && res.data && res.data.email && res.data.key) {
+        clearInvite();
         var patch = {
           email: String(res.data.email),
           syncKey: P.normalizeKey(res.data.key),
@@ -1711,36 +1715,42 @@
 
   /* ========================================================== landing gate
    * First thing a new device sees: a full-screen cover requiring Google sign-in.
-   * There is no way past it without a verified sign-in — no skip, no local mode.
-   * Once passed (signedInAs in settings, device-local), boots go straight in, so the
-   * installed PWA still opens instantly offline on a device that already signed in.
+   * There is no way past it without a verified sign-in — no skip, no local mode —
+   * and the backend only signs in accounts on its member whitelist (contract v5).
+   * New members arrive via single-use invite links minted in the Apps Script editor:
+   *   <app>/#invite=<token>&be=<base64url of the backend /exec URL>
+   * Both values ride the URL FRAGMENT, which browsers never send to any server, so
+   * the backend address stays out of request logs. Once passed (signedInAs in
+   * settings, device-local), boots go straight in, so the installed PWA still opens
+   * instantly offline on a device that already signed in.
    */
 
-  /**
-   * decryptScriptUrl(blob, passphrase, cb(err, url)) — unlocks the config.js
-   * encryptedScriptUrl (made by tools/encrypt-url.html): PBKDF2-SHA256 → AES-256-GCM.
-   * GCM authenticates, so a wrong passphrase fails cleanly rather than yielding garbage.
-   */
-  function decryptScriptUrl(blob, passphrase, cb) {
-    var subtle = window.crypto && window.crypto.subtle;
-    if (!subtle || !blob || !blob.salt || !blob.iv || !blob.ct) { cb('unsupported'); return; }
-    function bytes(b64) {
-      var s = atob(String(b64)), a = new Uint8Array(s.length);
-      for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
-      return a;
+  var INVITE_SS_KEY = 'wordGoblin.invite';
+
+  /** Stashes #invite=…&be=… from an invite link, then cleans the address bar. */
+  function captureInviteLink() {
+    var h = window.location.hash || '';
+    var m = /[#&]invite=([^&]+)/.exec(h);
+    if (!m) return;
+    try { window.sessionStorage.setItem(INVITE_SS_KEY, decodeURIComponent(m[1])); } catch (e) {}
+    var be = /[#&]be=([^&]+)/.exec(h);
+    if (be) {
+      try {
+        var b64 = decodeURIComponent(be[1]).replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        var u = window.atob(b64).trim();
+        if (/^https:\/\/script\.google\.com\/.+\/exec$/.test(u)) P.setSettings({ scriptUrl: u });
+      } catch (e) { /* malformed be= — the URL field still works */ }
     }
-    try {
-      var enc = new TextEncoder();
-      subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey'])
-        .then(function (k) {
-          return subtle.deriveKey(
-            { name: 'PBKDF2', hash: 'SHA-256', salt: bytes(blob.salt), iterations: Number(blob.it) || 1500000 },
-            k, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-        })
-        .then(function (key) { return subtle.decrypt({ name: 'AES-GCM', iv: bytes(blob.iv) }, key, bytes(blob.ct)); })
-        .then(function (buf) { cb(null, new TextDecoder().decode(buf)); })
-        ['catch'](function () { cb('bad'); });
-    } catch (e) { cb('unsupported'); }
+    window.location.hash = '#/';
+  }
+
+  function pendingInvite() {
+    try { return window.sessionStorage.getItem(INVITE_SS_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function clearInvite() {
+    try { window.sessionStorage.removeItem(INVITE_SS_KEY); } catch (e) {}
   }
 
   function showLanding() {
@@ -1777,47 +1787,6 @@
 
     var defaults = window.WORDGOBLIN_DEFAULTS || {};
 
-    /* Encrypted backend address in config.js → one passphrase field instead of the URL. */
-    var encBlob = defaults.encryptedScriptUrl || null;
-    var passWrap = el('div', 'field landing-pass');
-    var passLabel = el('label', 'field-label', 'Backend passphrase');
-    passLabel.setAttribute('for', 'landing-pass');
-    var passRow = el('div', 'landing-pass-row');
-    var pass = el('input', 'input');
-    pass.type = 'password';
-    pass.id = 'landing-pass';
-    pass.placeholder = 'your passphrase';
-    pass.setAttribute('autocomplete', 'off');
-    var unlock = U.button('Unlock', 'btn btn-primary btn-sm', function () {
-      var phrase = pass.value.trim();
-      if (!phrase) return;
-      statusFn('Unlocking (a second or two)…', '');
-      unlock.disabled = true;
-      decryptScriptUrl(encBlob, phrase, function (err, plainUrl) {
-        unlock.disabled = false;
-        if (err) {
-          statusFn(err === 'bad' ? 'Wrong passphrase — check it and try again.'
-            : 'This browser cannot decrypt here — paste the URL below instead.', 'bad');
-          return;
-        }
-        P.setSettings({ scriptUrl: plainUrl.trim() });
-        url.value = plainUrl.trim();
-        passWrap.hidden = true;
-        statusFn('Backend unlocked.', 'ok');
-        tryInit();
-      });
-    });
-    pass.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); unlock.click(); }
-    });
-    passRow.appendChild(pass);
-    passRow.appendChild(unlock);
-    passWrap.appendChild(passLabel);
-    passWrap.appendChild(passRow);
-    passWrap.appendChild(U.para('Decrypts the app’s saved backend address on this device — nothing is sent anywhere.', 'field-hint'));
-    passWrap.hidden = !(encBlob && !P.settings.scriptUrl && window.crypto && window.crypto.subtle);
-    card.appendChild(passWrap);
-
     var urlWrap = el('div', 'field landing-url');
     var urlLabel = el('label', 'field-label', 'Apps Script web-app URL');
     urlLabel.setAttribute('for', 'landing-scripturl');
@@ -1828,7 +1797,15 @@
     url.value = P.settings.scriptUrl || U.str(defaults.scriptUrl) || '';
     urlWrap.appendChild(urlLabel);
     urlWrap.appendChild(url);
-    urlWrap.appendChild(U.para('Your personal backend from EMAIL-SETUP.md — sign-in, sync and the daily e-mail all live there.', 'field-hint'));
+    urlWrap.appendChild(U.para('Fills in automatically from an invite link. Owners: this is your backend from EMAIL-SETUP.md.', 'field-hint'));
+    urlWrap.hidden = !P.settings.scriptUrl && !U.str(defaults.scriptUrl);
+    if (urlWrap.hidden) {
+      var reveal = U.button('Enter a backend URL by hand', 'btn btn-quiet btn-sm landing-reveal', function () {
+        urlWrap.hidden = false;
+        reveal.hidden = true;
+      });
+      card.appendChild(reveal);
+    }
     card.appendChild(urlWrap);
 
     inner.appendChild(card);
@@ -1857,9 +1834,8 @@
         return;
       }
       if (!u) {
-        note.textContent = passWrap.hidden
-          ? 'Paste your Apps Script URL below to sign in — or set one up first with EMAIL-SETUP.md.'
-          : 'Enter your backend passphrase above to unlock sign-in (or paste the URL below).';
+        note.textContent = 'Word Goblin is invite-only: open the invite link you were sent and ' +
+          'this page fills in by itself. Owners can enter their backend URL by hand instead.';
         return;
       }
       note.textContent = 'Checking your backend…';
@@ -1918,6 +1894,7 @@
     buildChrome();
     applyTheme();
     C.rebuild();
+    captureInviteLink();               // before routing: #invite=… is not a route
 
     var footer = el('footer', 'sitefoot');
     footer.appendChild(el('span', null, 'Word Goblin · offline-first · curriculum after KLEAR / Sogang / Yonsei / TTMIK and Integrated Chinese / HSK / NPCR'));

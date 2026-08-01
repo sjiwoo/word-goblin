@@ -35,17 +35,16 @@ static and works offline (no build step, no CDN, no server). Opening `index.html
 straight from disk still runs the code, but the sign-in gate needs https, so first-time
 use has to happen on the hosted version.
 
-On a new device the app opens with a **sign-in landing page**: unlock or enter your Apps
-Script URL and press *Sign in with Google* — your progress, sync key and settings all
-fill in from that one click. Google sign-in is **required**: there is no way past the
-landing page without it, so the app only works on the hosted (https) version where the
-Google button can load. Once a device is signed in it goes straight to the app on every
-later visit, including offline.
-Editing `js/config.js` with your script URL saves even that pasting step — and to keep the
-URL out of the public repo, open `tools/encrypt-url.html` locally, encrypt it with a
-passphrase (5+ random words; the tool has a dice button), and commit the encrypted blob
-instead: new devices then ask for the short passphrase rather than the long URL. On a phone, open the URL once and
-*Add to Home Screen*: it installs as an app and works offline afterwards.
+The app is **invite-only**. On a new device it opens with a sign-in landing page; open
+the **invite link** you were sent and everything fills in by itself — press *Sign in with
+Google* and your progress, sync key and settings follow. The backend keeps a whitelist
+of member Google accounts: sign-in is refused for anyone else, so there is no way past
+the landing page without both an invite and a Google account. The owner mints
+single-use invite links (valid 30 days) by running `createInviteLink()` or
+`emailInvite()` in the Apps Script editor — see EMAIL-SETUP.md, "Members & invites".
+Once a device is signed in it goes straight to the app on every later visit, including
+offline. On a phone, open your invite link once and *Add to Home Screen*: it installs
+as an app and works offline afterwards.
 
 Audio uses your device's built-in Korean/Chinese voices (Web Speech API) — click any
 native-script word or sentence to hear it.
@@ -64,9 +63,11 @@ Both are powered by one small Google Apps Script you deploy in your own Google a
 - Your progress syncs across devices: generate a **sync key** on one device, type it on
   the other, and studying on your phone and desktop merges cleanly (most-progress-wins,
   never clobbers).
-- Optional **Sign in with Google**: after a one-time OAuth-client setup (see
-  EMAIL-SETUP.md), a Google button in Settings replaces the typing — one click proves
-  your address, fetches your sync key, and syncs settings and progress.
+- **Sign in with Google** (required to use the app at all): after a one-time
+  OAuth-client setup (see EMAIL-SETUP.md), the Google button on the landing page and in
+  Settings proves your address, fetches your sync key, and syncs settings and progress
+  in one click. Only whitelisted member accounts get in — the owner manages members and
+  single-use invite links from the Apps Script editor.
 
 Everything stays in your own Google account; nothing is sent anywhere else.
 

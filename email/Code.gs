@@ -1,5 +1,5 @@
 /**
- * Word Goblin — mini-lesson email + progress-sync backend  (contract v3)
+ * Word Goblin — mini-lesson email + progress-sync backend  (contract v5, invite-only)
  * ------------------------------------------------------------------
  * Single-file Google Apps Script (V8 runtime). No libraries, no server, free forever.
  *
@@ -43,6 +43,16 @@ var REMINDER_HOUR = 8;
 /** Shown as the email sender name. */
 var SENDER_NAME = 'Word Goblin';
 
+/** Where the app lives — used to build invite links. */
+var APP_URL = 'https://sjiwoo.github.io/word-goblin/';
+
+/**
+ * This deployment's /exec URL, embedded (base64, in the URL fragment) in invite links so
+ * an invited friend never has to type it. Leave '' to auto-detect; if the auto-detected
+ * value ever ends in /dev (it can when run from the editor), paste the real /exec URL here.
+ */
+var SCRIPT_URL = '';
+
 /* --- Queue limits. Script Properties cap each stored value at 9 KB, so queues are
        stored one property per language and are trimmed to fit before writing. --- */
 var MAX_QUEUE_ITEMS = 10;      // items kept per language
@@ -63,6 +73,9 @@ var QUEUE_PREFIX = 'queue:';        // queue:<email>:<lang> -> {items, pointer, 
 var KEY_PREFIX = 'key:';            // key:<email>          -> sync key (plain string)
 var PROG_PREFIX = 'prog:';          // prog:<email>:<n>     -> one chunk of the JSON blob
 var PROGMETA_PREFIX = 'progmeta:';  // progmeta:<email>     -> {chunks, bytes, updatedAt}
+var ALLOW_PREFIX = 'allow:';        // allow:<email>        -> {addedAt, via} member whitelist
+var INVITE_PREFIX = 'invite:';      // invite:<token>       -> {createdAt, note} single-use
+var INVITE_TTL_DAYS = 30;           // unredeemed invites expire after this many days
 var LEGACY_KEY = 'subscribers';     // v1 single-blob storage, migrated automatically
 
 /** Returned verbatim whenever the presented sync key does not match the stored one. */
@@ -158,7 +171,7 @@ function doGet(e) {
   return jsonOut_({
     ok: true,
     service: 'Word Goblin email reminders',
-    contract: 'v3 (mini-lesson + progress sync)',
+    contract: 'v5 (invite-only + mini-lesson + progress sync)',
     status: 'running',
     subscribers: emails.length,
     queues: queueStats,
@@ -203,7 +216,7 @@ function doPost(e) {
 
     // Google login carries no email of its own — the address comes out of the verified
     // ID token — so it is dispatched before the email check.
-    if (action === 'googlelogin') return googleLogin_(body.idToken);
+    if (action === 'googlelogin') return googleLogin_(body.idToken, body.inviteToken);
 
     var email = normalizeEmail_(body.email);
 
@@ -349,6 +362,13 @@ function authorize_(email, key) {
   var provided = normalizeKey_(key);
   if (!provided) return false;
 
+  // Members only (contract v5): an address outside the whitelist cannot claim a key,
+  // store data, or subscribe — so a stranger who learns the URL can do nothing with it.
+  if (!isAllowed_(email)) {
+    Logger.log('Refused non-member request for ' + email);
+    return false;
+  }
+
   var props = PropertiesService.getScriptProperties();
   var stored = props.getProperty(keyKey_(email));
   if (stored) return provided === stored;
@@ -402,7 +422,7 @@ function setupGoogleLogin() {
  * signature and expiry); we additionally require our audience, a Google issuer,
  * and a verified email address.
  */
-function googleLogin_(idToken) {
+function googleLogin_(idToken, inviteToken) {
   var clientId = String(PropertiesService.getScriptProperties().getProperty('googleClientId') || '');
   if (!clientId) {
     return jsonOut_({ ok: false, error: 'Google sign-in is not enabled on this backend yet — run setupGoogleLogin() in the Apps Script editor (see EMAIL-SETUP.md).' });
@@ -436,6 +456,20 @@ function googleLogin_(idToken) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    // Members only (contract v5). A valid single-use invite token whitelists the
+    // signing-in address on the spot; anyone else is turned away by name.
+    if (!isAllowed_(email) && !consumeInvite_(inviteToken, email)) {
+      Logger.log('googleLogin refused: ' + email + ' is not a member' +
+                 (inviteToken ? ' (invite token invalid, used, or expired)' : ''));
+      return jsonOut_({
+        ok: false,
+        code: 'notInvited',
+        error: 'This Google account (' + email + ') is not on the member list. ' +
+               'Ask the app owner for an invite link' +
+               (inviteToken ? ' — the one you used has already been used or has expired.' : '.')
+      });
+    }
+
     var props = PropertiesService.getScriptProperties();
     var key = props.getProperty(keyKey_(email));
     if (!key) {
@@ -474,6 +508,166 @@ function generateKey_() {
     out += alphabet.charAt((digest[i] & 255) % alphabet.length);
   }
   return out;
+}
+
+/* ==================================================================
+   MEMBERS + INVITES (contract v5)
+
+   The app is invite-only: googleLogin_ and authorize_ both check the whitelist, so a
+   non-member can neither sign in nor touch any stored data even if they know this URL.
+   The account that owns this script is always a member — you can never lock yourself
+   out. Everyone else gets in through addMember() or a single-use invite link.
+   ================================================================== */
+
+/** True when this address may use the app: the script owner, or a whitelisted member. */
+function isAllowed_(email) {
+  if (!email) return false;
+  if (PropertiesService.getScriptProperties().getProperty(ALLOW_PREFIX + email)) return true;
+  return normalizeEmail_(Session.getEffectiveUser().getEmail()) === email;
+}
+
+/**
+ * Redeems a single-use invite token for the given (already Google-verified) address:
+ * deletes the token and whitelists the address in one step. Returns false for a missing,
+ * already-used, or expired token. Caller holds the script lock, so a token can never be
+ * redeemed twice in a race.
+ */
+function consumeInvite_(token, email) {
+  var t = String(token == null ? '' : token).trim();
+  if (!t || t.length > 64 || !/^[0-9A-Z]+$/.test(t)) return false;
+
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(INVITE_PREFIX + t);
+  if (!raw) return false;
+
+  var rec = null;
+  try { rec = JSON.parse(raw); } catch (err) { rec = null; }
+  props.deleteProperty(INVITE_PREFIX + t);   // single-use, even when expired
+
+  if (rec && rec.createdAt &&
+      (Date.now() - new Date(rec.createdAt).getTime()) > INVITE_TTL_DAYS * 86400000) {
+    Logger.log('Invite expired (unused for over ' + INVITE_TTL_DAYS + ' days): ' + t.slice(0, 4) + '…');
+    return false;
+  }
+
+  props.setProperty(ALLOW_PREFIX + email, JSON.stringify({
+    addedAt: new Date().toISOString(),
+    via: 'invite' + (rec && rec.note ? ':' + rec.note : '')
+  }));
+  Logger.log('Invite redeemed: ' + email + ' is now a member.');
+  return true;
+}
+
+/** 20-char single-use invite token from the same CSPRNG-backed digest as sync keys. */
+function generateToken_() {
+  var alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    Utilities.getUuid() + Utilities.getUuid());
+  var out = '';
+  for (var i = 0; i < 20; i++) {
+    out += alphabet.charAt((digest[i] & 255) % alphabet.length);
+  }
+  return out;
+}
+
+/** The invite URL for a token: app address + token + this backend's URL, all in the fragment. */
+function inviteUrl_(token) {
+  var be = SCRIPT_URL || ScriptApp.getService().getUrl() || '';
+  if (be.indexOf('/dev') !== -1 || !/\/exec$/.test(be)) {
+    Logger.log('WARNING: auto-detected backend URL looks wrong (' + be + '). ' +
+               'Paste your real /exec URL into the SCRIPT_URL variable at the top and rerun.');
+  }
+  return APP_URL + '#invite=' + token + '&be=' +
+         Utilities.base64EncodeWebSafe(be).replace(/=+$/, '');
+}
+
+/**
+ * RUN THIS to invite someone: prints a single-use link (valid ~30 days) to the execution
+ * log. Send it over any channel you like; the first Google account signed in with it
+ * becomes a member. The link carries the backend address in the URL fragment, which
+ * browsers never transmit to servers, so it stays out of request logs.
+ */
+function createInviteLink() {
+  var token = generateToken_();
+  PropertiesService.getScriptProperties().setProperty(INVITE_PREFIX + token,
+    JSON.stringify({ createdAt: new Date().toISOString() }));
+  var link = inviteUrl_(token);
+  Logger.log('Single-use invite link (expires in ' + INVITE_TTL_DAYS + ' days if unused):\n\n' + link);
+  return link;
+}
+
+/**
+ * RUN THIS to invite someone by email: paste their address into TO, run, and they get a
+ * short invitation email with their personal single-use link.
+ */
+function emailInvite() {
+  var TO = 'PASTE-THEIR-EMAIL-HERE';
+  if (TO.indexOf('PASTE-') === 0) {
+    throw new Error('Edit emailInvite() first: replace the placeholder with the recipient address, then run again.');
+  }
+  var link = createInviteLink();
+  MailApp.sendEmail({
+    to: TO,
+    subject: 'You’re invited to Word Goblin 🧌',
+    name: SENDER_NAME,
+    htmlBody:
+      '<p>You’ve been invited to <b>Word Goblin</b> — a Korean + Chinese course with the ' +
+      'etymology of every word.</p>' +
+      '<p><a href="' + link + '">Accept the invite and open the app</a> (sign in with the Google ' +
+      'account you want to use — the link works once).</p>' +
+      '<p style="color:#8a8378;font-size:13px;">If the link has expired, ask for a new one.</p>',
+    body: 'You’re invited to Word Goblin.\n\nOpen this link and sign in with Google (it works once):\n' +
+          link + '\n\nIf it has expired, ask for a new one.'
+  });
+  Logger.log('Invite emailed to ' + TO);
+}
+
+/** RUN THIS to whitelist an address directly (no invite link). */
+function addMember() {
+  var EMAIL = 'PASTE-THEIR-EMAIL-HERE';
+  if (EMAIL.indexOf('PASTE-') === 0) {
+    throw new Error('Edit addMember() first: replace the placeholder with the member address, then run again.');
+  }
+  var email = normalizeEmail_(EMAIL);
+  if (!isValidEmail_(email)) throw new Error('"' + EMAIL + '" does not look like an email address.');
+  PropertiesService.getScriptProperties().setProperty(ALLOW_PREFIX + email,
+    JSON.stringify({ addedAt: new Date().toISOString(), via: 'addMember' }));
+  Logger.log(email + ' is now a member.');
+}
+
+/**
+ * RUN THIS to remove a member. They can no longer sign in or sync, but their stored
+ * data stays until you (or they, while still signed in) run deleteAll for the address.
+ */
+function removeMember() {
+  var EMAIL = 'PASTE-THEIR-EMAIL-HERE';
+  if (EMAIL.indexOf('PASTE-') === 0) {
+    throw new Error('Edit removeMember() first: replace the placeholder with the member address, then run again.');
+  }
+  var email = normalizeEmail_(EMAIL);
+  PropertiesService.getScriptProperties().deleteProperty(ALLOW_PREFIX + email);
+  Logger.log(email + ' removed from the member list. Their synced data is untouched — ' +
+             'run deleteAll-style cleanup separately if you want it gone.');
+}
+
+/** Prints the member list and any outstanding (unredeemed) invites. */
+function listMembers() {
+  var props = PropertiesService.getScriptProperties();
+  var keys = props.getKeys().sort();
+  var members = 0, invites = 0;
+
+  Logger.log('Owner (always a member): ' + normalizeEmail_(Session.getEffectiveUser().getEmail()));
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i].indexOf(ALLOW_PREFIX) === 0) {
+      members++;
+      Logger.log('Member: ' + keys[i].slice(ALLOW_PREFIX.length) + '  ' + (props.getProperty(keys[i]) || ''));
+    } else if (keys[i].indexOf(INVITE_PREFIX) === 0) {
+      invites++;
+      Logger.log('Open invite: ' + keys[i].slice(INVITE_PREFIX.length).slice(0, 4) + '…  ' +
+                 (props.getProperty(keys[i]) || ''));
+    }
+  }
+  Logger.log(members + ' member(s) besides you, ' + invites + ' unredeemed invite(s).');
 }
 
 /* ==================================================================

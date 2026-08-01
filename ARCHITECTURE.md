@@ -90,6 +90,18 @@ and token verification in the user's own Apps Script:
   first login) plus subscription state. Owner enables it by pasting their OAuth client ID
   into `setupGoogleLogin()` and running it once (EMAIL-SETUP.md has the Cloud Console
   walkthrough). The client ID is public; all data access still goes through the sync key.
+- Members & invites (contract v5): the backend is invite-only. `allow:<email>` Script
+  Properties form the whitelist (the script owner is always allowed via
+  `Session.getEffectiveUser()`); `googleLogin_` refuses non-members (`code:'notInvited'`)
+  and `authorize_` refuses them for every data action, so knowing the URL grants nothing.
+  Single-use invite tokens (`invite:<token>`, 20-char CSPRNG-backed, 30-day TTL) are
+  minted with `createInviteLink()` / `emailInvite()` and redeemed inside the login lock
+  by `consumeInvite_` (delete token + whitelist the verified email atomically). Invite
+  links are `<APP_URL>#invite=<token>&be=<base64url /exec URL>` — both values ride the
+  URL fragment, which browsers never transmit, so the backend address stays out of
+  server logs; app.js `captureInviteLink()` stashes them (sessionStorage +
+  `settings.scriptUrl`) before routing and sends `inviteToken` with `googleLogin`.
+  Member management: `addMember()` / `removeMember()` / `listMembers()` in the editor.
 - Landing gate (app.js `showLanding`): boot overlays a full-screen sign-in page until
   `settings.signedInAs` holds a verified Google address (device-local — in
   `LOCAL_ONLY_SETTINGS` and coerce(), never adopted from the cloud). There is NO skip:
@@ -98,8 +110,10 @@ and token verification in the user's own Apps Script:
   signed in once boots straight in, including offline, so the installed PWA still works.
   Signing in from either the landing or the Settings panel sets `signedInAs` via the
   shared `completeGoogleLogin()`; "Sign out on this device" (Settings → Cross-device
-  sync) clears it and reloads. `js/config.js` (`window.WORDGOBLIN_DEFAULTS`) ships the
-  passphrase-encrypted backend URL — public by design.
+  sync) clears it and reloads. `js/config.js` (`window.WORDGOBLIN_DEFAULTS.scriptUrl`)
+  is an optional public pre-fill and normally ships empty — new devices get the backend
+  address from their invite link instead. (The earlier passphrase-encrypted URL
+  mechanism and tools/encrypt-url.html were retired when invites landed.)
   Honest scope note: the gate (like everything client-side on a public static site) is
   UX-level, not content security — the curriculum is in a public repo. Real access
   control lives in the backend: every Code.gs data action requires the per-email sync

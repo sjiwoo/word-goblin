@@ -218,13 +218,40 @@ That's it. Open the app's **Settings → Cross-device sync** on any device: with
 Script URL filled in, the Google button appears there automatically. The button needs the
 hosted (https) app; the manual sync key keeps working everywhere, with or without this.
 
-How it works (developer contract v4): the app posts
-`{"action":"googleLogin","idToken":"<Google ID token>"}`; the script verifies the token
-against `https://oauth2.googleapis.com/tokeninfo` (audience must equal the stored
-`googleClientId` script property, issuer must be Google, email must be verified) and replies
-`{"ok":true,"email":…,"key":…,"subscribed":…,"languages":[…]}`. `GET ?action=config` returns
-`{"ok":true,"googleClientId":…}` so the app knows whether to show the button. The client ID
-is public by design; the sync key still gates all data access.
+How it works (developer contract v5): the app posts
+`{"action":"googleLogin","idToken":"<Google ID token>","inviteToken":"<optional>"}`; the
+script verifies the token against `https://oauth2.googleapis.com/tokeninfo` (audience must
+equal the stored `googleClientId` script property, issuer must be Google, email must be
+verified), checks the member whitelist (redeeming a valid invite token on the spot), and
+replies `{"ok":true,"email":…,"key":…,"subscribed":…,"languages":[…]}` — or
+`{"ok":false,"code":"notInvited",…}` for accounts that are not members. `GET ?action=config`
+returns `{"ok":true,"googleClientId":…}` so the app knows whether to show the button. The
+client ID is public by design; membership plus the sync key gate all data access.
+
+---
+
+## Members & invites
+
+The app is **invite-only**: only Google accounts on the script's whitelist can sign in or
+touch any stored data. Your own account (the one that owns the script) is always a member —
+you can never lock yourself out. Everything below runs from the Apps Script editor
+(select the function in the dropdown, press **▶ Run**, read the **Execution log**):
+
+- **`createInviteLink()`** — prints a single-use invite link, valid 30 days. Send it to a
+  friend any way you like; the first Google account they sign in with becomes a member.
+  The link carries your backend address in the URL *fragment* (`#…`), which browsers never
+  send to any server — so it stays out of logs. **Tip:** run it once for yourself too and
+  keep the link — it's the easiest way to set up your own new devices.
+- **`emailInvite()`** — same, but emails the link for you: edit the `TO` address at the top
+  of the function first, then run.
+- **`addMember()` / `removeMember()`** — whitelist or un-whitelist an address directly
+  (edit the `EMAIL` placeholder, run). Removing a member blocks future sign-ins and syncs;
+  their already-stored data stays until deleted.
+- **`listMembers()`** — prints current members and unredeemed invites.
+
+If the link `createInviteLink()` prints ever looks wrong (contains `/dev` instead of
+`/exec`), paste your real web-app URL into the `SCRIPT_URL` variable at the top of Code.gs
+and run it again.
 
 ---
 
