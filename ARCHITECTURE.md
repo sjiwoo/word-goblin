@@ -109,11 +109,14 @@ and token verification in the user's own Apps Script:
   file:// copies are told to open the hosted app (GIS needs https). A device that has
   signed in once boots straight in, including offline, so the installed PWA still works.
   Signing in from either the landing or the Settings panel sets `signedInAs` via the
-  shared `completeGoogleLogin()`; "Sign out on this device" (Settings → Cross-device
-  sync) clears it and reloads. `js/config.js` (`window.WORDGOBLIN_DEFAULTS.scriptUrl`)
-  is an optional public pre-fill and normally ships empty — new devices get the backend
-  address from their invite link instead. (The earlier passphrase-encrypted URL
-  mechanism and tools/encrypt-url.html were retired when invites landed.)
+  shared `completeGoogleLogin()`; "Sign out on this device" (Settings → Account) clears it
+  and reloads. The Google button is never gated behind typing a URL: `js/config.js`
+  (`WORDGOBLIN_DEFAULTS.scriptUrl` + `googleClientId`) is public deployment config, so a
+  seeded client ID paints the button on first frame and `?action=config` only corrects it
+  afterwards (`showButton` is idempotent per ID). With neither configured, the landing
+  falls back to a revealed URL field. Publishing both is safe because the whitelist is
+  server-side. (The earlier passphrase-encrypted URL mechanism and tools/encrypt-url.html
+  were retired when invites landed.)
   Honest scope note: the gate (like everything client-side on a public static site) is
   UX-level, not content security — the curriculum is in a public repo. Real access
   control lives in the backend: every Code.gs data action requires the per-email sync

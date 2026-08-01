@@ -1397,13 +1397,21 @@
 
     function initGoogleButton() {
       var s = P.settings;
+      var defs = window.WORDGOBLIN_DEFAULTS || {};
       if (!gsiPossibleHere()) {
         gNote.textContent = 'Google sign-in needs the hosted (https) version of the app; the manual key below works everywhere.';
         return;
       }
+      if (!s.scriptUrl && U.str(defs.scriptUrl)) P.setSettings({ scriptUrl: U.str(defs.scriptUrl) });
+      s = P.settings;
       if (!s.scriptUrl) {
         gNote.textContent = 'Add your Apps Script URL above and Google sign-in appears here.';
         return;
+      }
+      if (U.str(defs.googleClientId)) {
+        renderGoogleButton(U.str(defs.googleClientId), gHost, function (resp) {
+          completeGoogleLogin(resp, setSyncMsg, function (ok) { if (ok) render(); });
+        }, function () {});
       }
       gNote.textContent = 'Checking this backend for Google sign-in…';
       var cfgUrl = s.scriptUrl + (s.scriptUrl.indexOf('?') === -1 ? '?' : '&') + 'action=config';
@@ -1815,15 +1823,14 @@
     url.value = P.settings.scriptUrl || U.str(defaults.scriptUrl) || '';
     urlWrap.appendChild(urlLabel);
     urlWrap.appendChild(url);
-    urlWrap.appendChild(U.para('Fills in automatically from an invite link. Owners: this is your backend from EMAIL-SETUP.md.', 'field-hint'));
-    urlWrap.hidden = !P.settings.scriptUrl && !U.str(defaults.scriptUrl);
-    if (urlWrap.hidden) {
-      var reveal = U.button('Enter a backend URL by hand', 'btn btn-quiet btn-sm landing-reveal', function () {
-        urlWrap.hidden = false;
-        reveal.hidden = true;
-      });
-      card.appendChild(reveal);
-    }
+    urlWrap.appendChild(U.para('Normally filled in for you. Owners: this is your backend from EMAIL-SETUP.md.', 'field-hint'));
+    urlWrap.hidden = true;
+    var reveal = U.button('Use a different backend', 'btn btn-quiet btn-sm landing-reveal', function () {
+      urlWrap.hidden = false;
+      reveal.hidden = true;
+      url.focus();
+    });
+    card.appendChild(reveal);
     card.appendChild(urlWrap);
 
     inner.appendChild(card);
@@ -1842,36 +1849,62 @@
       }, 320);
     }
 
+    var shownClientId = '';        // which ID the visible button is bound to
+
+    /** Draws (or redraws) the Google button. Safe to call again with a corrected ID. */
+    function showButton(cid) {
+      if (!cid || cid === shownClientId) return;
+      shownClientId = cid;
+      renderGoogleButton(cid, gHost, function (resp) {
+        completeGoogleLogin(resp, statusFn, function (ok) { if (ok) dismiss(); });
+      }, function (ok) {
+        note.textContent = ok
+          ? 'Members sign in with their Google account. Not a member yet? Ask for an invite.'
+          : 'Could not load Google sign-in — check your connection, then reload this page.';
+        if (!ok) shownClientId = '';
+      });
+    }
+
+    /**
+     * The button is shown as early as possible and never gated behind typing a URL: the
+     * client ID and backend address are public (js/config.js), and membership — checked
+     * server-side against the whitelist — is what actually decides who gets in.
+     */
     function tryInit() {
-      var u = url.value.trim();
-      if (u !== P.settings.scriptUrl) P.setSettings({ scriptUrl: u });
-      U.clear(gHost);
+      var u = (url.value.trim() || P.settings.scriptUrl || U.str(defaults.scriptUrl) || '').trim();
+      if (u && u !== P.settings.scriptUrl) P.setSettings({ scriptUrl: u });
+      if (u && !url.value.trim()) url.value = u;
+
       if (!gsiPossibleHere()) {
+        U.clear(gHost);
         note.textContent = 'Google sign-in only works on the hosted (https) app — open ' +
           'https://sjiwoo.github.io/word-goblin/ to sign in. Copies opened from disk cannot be used.';
         return;
       }
       if (!u) {
-        note.textContent = 'Word Goblin is invite-only: open the invite link you were sent and ' +
-          'this page fills in by itself. Owners can enter their backend URL by hand instead.';
+        U.clear(gHost);
+        note.textContent = 'This copy has no backend configured yet. Open your invite link, or ' +
+          'add your Apps Script URL below.';
+        urlWrap.hidden = false;
+        reveal.hidden = true;
         return;
       }
-      note.textContent = 'Checking your backend…';
+
+      // Seeded ID (js/config.js) paints the button immediately — no round-trip, and it
+      // still works when the backend is slow. The live value below corrects it if needed.
+      var seeded = U.str(defaults.googleClientId);
+      if (seeded) showButton(seeded);
+      else note.textContent = 'Checking your backend…';
+
       var cfgUrl = u + (u.indexOf('?') === -1 ? '?' : '&') + 'action=config';
       window.fetch(cfgUrl).then(function (r) { return r.json(); }).then(function (cfg) {
         var cid = cfg && cfg.googleClientId;
-        if (!cid) {
+        if (cid) { showButton(cid); return; }
+        if (!shownClientId) {
           note.textContent = 'This backend does not have Google sign-in enabled yet — run setupGoogleLogin() in the Apps Script editor (EMAIL-SETUP.md, "One-click Google sign-in"). Sign-in is required to enter.';
-          return;
         }
-        renderGoogleButton(cid, gHost, function (resp) {
-          completeGoogleLogin(resp, statusFn, function (ok) { if (ok) dismiss(); });
-        }, function (ok) {
-          note.textContent = ok
-            ? 'Sign in with the Google account whose e-mail you use for Word Goblin.'
-            : 'Could not load Google sign-in — check your connection, then reload this page.';
-        });
       })['catch'](function () {
+        if (shownClientId) return;         // seeded button is up; the backend can wait
         note.textContent = 'Could not reach that backend. If the URL is right (ends in /exec) and you are online, ' +
           'the usual cause is the deployment’s access setting: in script.google.com open Deploy → Manage ' +
           'deployments → ✏️, set “Execute as: Me” and “Who has access: Anyone”, pick New version, Deploy. ' +
@@ -1879,7 +1912,7 @@
       });
     }
 
-    url.addEventListener('change', tryInit);
+    url.addEventListener('change', function () { shownClientId = ''; tryInit(); });
     tryInit();
     document.body.appendChild(ov);
   }

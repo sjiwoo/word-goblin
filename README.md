@@ -35,13 +35,15 @@ static and works offline (no build step, no CDN, no server). Opening `index.html
 straight from disk still runs the code, but the sign-in gate needs https, so first-time
 use has to happen on the hosted version.
 
-The app is **invite-only**. On a new device it opens with a sign-in landing page; open
-the **invite link** you were sent and everything fills in by itself — press *Sign in with
-Google* and your progress, sync key and settings follow. The backend keeps a whitelist
-of member Google accounts: sign-in is refused for anyone else, so there is no way past
-the landing page without both an invite and a Google account. The owner mints
-single-use invite links (valid 30 days) by running `createInviteLink()` or
-`emailInvite()` in the Apps Script editor — see EMAIL-SETUP.md, "Members & invites".
+The app is **invite-only**. Its landing page always offers *Sign in with Google*; the
+backend keeps a whitelist of member accounts and refuses everyone else, so membership —
+not the landing page — is what actually decides who gets in. Owners: fill in
+`js/config.js` with your Apps Script URL (and optionally your OAuth client ID) so the
+button appears for everyone with no typing; both values are public by design and grant
+nothing on their own. Members can also open an **invite link**, which carries the backend
+address for them. The owner mints single-use invite links (valid 30 days) by running
+`createInviteLink()` or `emailInvite()` in the Apps Script editor — see EMAIL-SETUP.md,
+"Members & invites".
 Once a device is signed in it goes straight to the app on every later visit, including
 offline. On a phone, open your invite link once and *Add to Home Screen*: it installs
 as an app and works offline afterwards.
