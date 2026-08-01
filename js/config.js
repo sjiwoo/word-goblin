@@ -19,6 +19,6 @@
  * address, so the app keeps working either way.
  */
 window.WORDGOBLIN_DEFAULTS = {
-  scriptUrl: '',
-  googleClientId: ''
+  scriptUrl: 'https://script.google.com/macros/s/AKfycbxtlGnGmumFnBzyR4G2ql79LHOL1rqMsKcdhd-hWViYWfv4WPjzYWx194iAWIBg8_ELxA/exec',
+  googleClientId: '723840638835-ou9a35tc501rqi8865sq987aqgdqi71a.apps.googleusercontent.com'
 };

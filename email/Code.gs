@@ -519,6 +519,7 @@ function googleLogin_(idToken, inviteToken) {
 
   var payload = null;
   var httpCode = 0;
+  var fetchError = '';
   try {
     var res = UrlFetchApp.fetch(
       'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
@@ -527,17 +528,30 @@ function googleLogin_(idToken, inviteToken) {
     if (httpCode === 200) payload = JSON.parse(res.getContentText());
     else Logger.log('googleLogin tokeninfo HTTP ' + httpCode + ': ' + res.getContentText().slice(0, 300));
   } catch (err) {
-    Logger.log('googleLogin tokeninfo error: ' + err);
-    payload = null;
+    fetchError = String(err);
+    Logger.log('googleLogin tokeninfo threw: ' + fetchError);
   }
 
   // Each failure gets its own message and log line — "could not be verified" for
-  // everything made the one common cause (a mismatched client ID) undiagnosable.
+  // everything made the real cause undiagnosable.
   if (!payload) {
+    // UrlFetchApp needs the script.external_request scope. A project authorized before
+    // this feature existed has no such grant, so every verification throws until the
+    // owner runs a function once in the editor and accepts the new permission prompt.
+    if (/authoriz|permission|scope/i.test(fetchError)) {
+      return jsonOut_({
+        ok: false,
+        code: 'needsAuthorization',
+        error: 'This backend has not been authorized to verify sign-ins yet. Owner fix: open the ' +
+               'Apps Script editor, run any function once (e.g. checkGoogleLogin) and accept the ' +
+               'permission prompt, then redeploy a New version.'
+      });
+    }
     return jsonOut_({
       ok: false,
       error: 'Google could not confirm that sign-in' +
              (httpCode ? ' (verification returned HTTP ' + httpCode + ')' : '') +
+             (fetchError ? ' (' + fetchError.slice(0, 120) + ')' : '') +
              '. The credential may have expired — reload the page and sign in again.'
     });
   }
