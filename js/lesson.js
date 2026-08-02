@@ -712,32 +712,12 @@ window.FableLesson = (function () {
     var meta = C.LANG_META[lang];
     var labels = C.tabLabels(unit);
 
-    /* ---- flatten the unit into a plan of small cards */
-    var plan = [{ sec: -1, kind: 'intro' }];
-    unit.sections.forEach(function (sec, i) {
-      if (sec.type === 'dialogue') {
-        plan.push({ sec: i, kind: 'dlg-intro' });
-        sec.lines.forEach(function (line, n) { plan.push({ sec: i, kind: 'dlg-line', line: line, n: n }); });
-      } else if (sec.type === 'vocab') {
-        sec.items.forEach(function (it, n) { plan.push({ sec: i, kind: 'vocab', item: it, n: n }); });
-      } else if (sec.type === 'grammar') {
-        sec.points.forEach(function (p, n) { plan.push({ sec: i, kind: 'gpoint', point: p, n: n }); });
-      } else if (sec.type === 'notes') {
-        for (var b = 0; b < sec.body.length; b += 2) {
-          plan.push({ sec: i, kind: 'notes', paras: sec.body.slice(b, b + 2), first: b === 0 });
-        }
-      } else if (sec.type === 'practice') {
-        plan.push({ sec: i, kind: 'practice' });
-      }
-      plan.push({ sec: i, kind: 'end' });
-    });
-
-    var secStart = [], secCount = [];
-    plan.forEach(function (c, k) {
-      if (c.sec < 0) return;
-      if (secStart[c.sec] === undefined) secStart[c.sec] = k;
-      secCount[c.sec] = (secCount[c.sec] || 0) + 1;
-    });
+    /* The plan is a flat list of PAGES, each guaranteed to fit the stage without
+     * scrolling — buildPlan() measures real content against the real stage and
+     * splits anything long across further pages. Entries: { sec, kind, anchor,
+     * node | build, term? }. It runs once the story is laid out, and again on a
+     * meaningful resize (rotation), re-finding the current page by its anchor. */
+    var plan = [], secStart = [], secCount = [];
 
     /* ---- chrome */
     U.clear(root);
@@ -780,88 +760,280 @@ window.FableLesson = (function () {
     navRow.appendChild(nextB);
     story.appendChild(navRow);
 
-    /* ---- card builders */
+    /* ---- pagination machinery: no page ever scrolls */
 
-    function secKicker(card, extra) {
-      return el('div', 'story-sec-kicker', labels[card.sec] + (extra ? ' · ' + extra : ''));
-    }
-
-    function introCard() {
-      var c = el('div', 'story-card story-intro');
-      var kick = el('div', 'unit-kicker');
-      kick.appendChild(el('span', 'unit-num', unit.order === 0 ? 'Foundation' : 'Unit ' + unit.order));
-      c.appendChild(kick);
-      c.appendChild(el('h1', 'story-unit-title', unit.title));
-      if (unit.titleNative) c.appendChild(native(unit.titleNative, lang, 'unit-title-native', 'div'));
-      if (unit.subtitle) c.appendChild(el('p', 'unit-subtitle', unit.subtitle));
-      unit.overview.forEach(function (p) { c.appendChild(U.para(p)); });
-      if (unit.textbookBasis.length) c.appendChild(basisBlock(unit));
-      c.appendChild(el('p', 'story-tapnote', 'Tap the right side to begin ›'));
+    function pageShell(cls, kickerText) {
+      var c = el('div', 'story-card' + (cls ? ' ' + cls : ''));
+      if (kickerText) c.appendChild(el('div', 'story-sec-kicker', kickerText));
       return c;
     }
 
-    function dlgIntroCard(card) {
-      var sec = unit.sections[card.sec];
-      var c = el('div', 'story-card');
-      c.appendChild(secKicker(card));
-      c.appendChild(el('h2', 'story-sec-title', sec.title));
-      if (sec.context) c.appendChild(el('p', 'scene', sec.context));
-      c.appendChild(playAllButton(sec, lang));
-      c.appendChild(el('p', 'story-tapnote', 'One line per card — tap through the conversation ›'));
-      return c;
+    /* Split a rich-text string at the sentence boundary nearest its middle.
+     * Inline markup (<b>/<i>) is tracked across the cut: tags left open in the
+     * first half are closed there and reopened in the second, so bold/italic
+     * runs survive pagination. Returns null when there is nothing to split. */
+    function splitTextBlock(b) {
+      var s = b.text || '';
+      var atoms = s.match(/<[^>]*>|[^<]+/g) || [];
+      var pieces = [];   /* { tag } | { text } — text pieces end at sentence marks */
+      atoms.forEach(function (a) {
+        if (a.charAt(0) === '<') { pieces.push({ tag: a }); return; }
+        (a.match(/[^.!?…。？！]+[.!?…。？！]*\s*/g) || [a]).forEach(function (p) {
+          pieces.push({ text: p });
+        });
+      });
+      var total = 0;
+      pieces.forEach(function (p) { if (p.text) total += p.text.length; });
+      var stack = [], run = 0, best = null;
+      for (var i = 0; i < pieces.length - 1; i++) {
+        var p = pieces[i];
+        if (p.tag) {
+          if (p.tag.charAt(1) === '/') stack.pop();
+          else if (!/^<(br|img|hr)/i.test(p.tag)) stack.push(p.tag);
+          continue;
+        }
+        run += p.text.length;
+        if (!/[.!?…。？！]\s*$/.test(p.text)) continue;   /* not a sentence end */
+        var d = Math.abs(run - total / 2);
+        if (!best || d < best.d) best = { i: i, d: d, stack: stack.slice() };
+      }
+      if (!best) return null;
+      var a1 = [], a2 = [];
+      pieces.forEach(function (p, i) { (i <= best.i ? a1 : a2).push(p.tag || p.text); });
+      var rest = a2.join('');
+      if (!rest.replace(/<[^>]*>/g, '').trim()) return null;   /* nothing after the cut */
+      var closers = best.stack.slice().reverse().map(function (t) {
+        return '</' + t.replace(/^<|>$/g, '').split(/[\s>]/)[0] + '>';
+      }).join('');
+      return [
+        { text: a1.join('').replace(/\s+$/, '') + closers, cls: b.cls },
+        { text: best.stack.join('') + rest.replace(/^\s+/, ''), cls: b.cls }
+      ];
     }
 
-    function lineCard(card) {
-      var line = card.line;
-      var sec = unit.sections[card.sec];
+    /* fitBlocks(blocks, cls, kicker, wrap) — measure blocks against the real
+     * stage and group them into pages that fit. blocks: {node} | {text, cls},
+     * plus keep:true on headings that must not be stranded at a page bottom.
+     * Returns [[{node, over?}…]…]. A lone block that cannot fit even alone is
+     * sentence-split; if that fails it gets its own page flagged `over`
+     * (which falls back to scrolling rather than clipping text). */
+    function fitBlocks(blocks, cls, kickerText, wrap) {
+      var meas = pageShell(cls, kickerText);
+      meas.classList.add('story-meas');
+      var host = wrap ? wrap() : el('div', 'story-body');
+      meas.appendChild(host);
+      stage.appendChild(meas);
+
+      function overflows() { return meas.scrollHeight > meas.clientHeight + 1; }
+
+      var queue = blocks.slice();
+      var pages = [], cur = [];
+      var guard = blocks.length * 6 + 40;
+      while (queue.length && guard-- > 0) {
+        var b = queue.shift();
+        var node = b.node || U.para(b.text, b.cls);
+        b.node = node;   /* re-queued blocks reuse the same element */
+        host.appendChild(node);
+        if (overflows()) {
+          host.removeChild(node);
+          if (!cur.length) {
+            var halves = splitTextBlock(b);
+            if (halves) { queue = halves.concat(queue); continue; }
+            pages.push([{ node: node, over: true }]);
+            U.clear(host);
+            continue;
+          }
+          queue.unshift(b);
+          /* a heading at the bottom of the page moves to the next one —
+           * never emptying the page, which would loop forever */
+          while (cur.length > 1 && cur[cur.length - 1].keep) {
+            queue.unshift(cur.pop().src);
+          }
+          pages.push(cur);
+          cur = [];
+          U.clear(host);
+          continue;
+        }
+        cur.push({ node: node, keep: !!b.keep, src: b });
+      }
+      if (cur.length) pages.push(cur);
+      stage.removeChild(meas);
+      return pages;
+    }
+
+    /** addPages(o) — paginate o.blocks and push the resulting page(s) onto the
+     * plan. o: { sec, kind, anchor, cls, kicker, wrap, blocks, term }. */
+    function addPages(o) {
+      var pages = fitBlocks(o.blocks, o.cls, o.kicker, o.wrap);
+      pages.forEach(function (pg, pi) {
+        var shell = pageShell(o.cls, o.kicker ? o.kicker + (pi ? ' · continued' : '') : '');
+        var host = o.wrap ? o.wrap() : el('div', 'story-body');
+        shell.appendChild(host);
+        var over = false;
+        pg.forEach(function (b) {
+          host.appendChild(b.node);
+          if (b.over) over = true;
+        });
+        if (over) shell.classList.add('story-scroll');
+        plan.push({ sec: o.sec, kind: o.kind, anchor: o.anchor, node: shell, term: o.term });
+      });
+    }
+
+    function lineCard(sec, i, line, n) {
       var c = el('div', 'story-card story-line');
-      c.appendChild(secKicker(card, 'line ' + (card.n + 1) + ' of ' + sec.lines.length));
+      c.appendChild(el('div', 'story-sec-kicker',
+        labels[i] + ' · line ' + (n + 1) + ' of ' + sec.lines.length));
       var mid = el('div', 'story-line-mid');
       if (line.speaker) mid.appendChild(native(line.speaker, lang, 'story-speaker', 'div'));
-      mid.appendChild(native(line.text, lang, 'story-term', 'div'));
+      mid.appendChild(native(line.text, lang,
+        'story-term' + (line.text.length > 26 ? ' story-term-long' : ''), 'div'));
       if (line.roman) mid.appendChild(el('div', 'story-roman', line.roman));
       if (line.gloss) mid.appendChild(el('div', 'story-gloss', line.gloss));
       c.appendChild(mid);
       return c;
     }
 
-    function vocabStoryCard(card) {
-      var sec = unit.sections[card.sec];
-      var c = el('div', 'story-card story-vocab');
-      c.appendChild(secKicker(card, 'word ' + (card.n + 1) + ' of ' + sec.items.length));
-      c.appendChild(vocabCard(card.item, lang));
-      return c;
-    }
+    var practiceNodes = {};   /* per-section: quiz sessions survive repagination */
 
-    function gpointCard(card) {
-      var sec = unit.sections[card.sec];
-      var c = el('div', 'story-card');
-      c.appendChild(secKicker(card, 'point ' + (card.n + 1) + ' of ' + sec.points.length));
-      c.appendChild(grammarPointBlock(card.point, card.n, lang));
-      return c;
-    }
-
-    function notesCard(card) {
-      var sec = unit.sections[card.sec];
-      var c = el('div', 'story-card');
-      c.appendChild(secKicker(card));
-      if (card.first) c.appendChild(el('h2', 'story-sec-title', sec.title));
-      card.paras.forEach(function (t) { c.appendChild(U.para(t)); });
-      return c;
-    }
-
-    function practiceCard(card) {
-      var sec = unit.sections[card.sec];
-      var c = el('div', 'story-card story-practice');
-      c.appendChild(secKicker(card));
+    function practiceCard(i) {
+      var sec = unit.sections[i];
+      var c = el('div', 'story-card story-practice story-scroll');
+      c.appendChild(el('div', 'story-sec-kicker', labels[i]));
       c.appendChild(el('h2', 'story-sec-title', sec.title));
       var body = el('div');
       c.appendChild(body);
-      renderPractice(body, lang, unit, sec, card.sec, function () {
+      renderPractice(body, lang, unit, sec, i, function () {
         if (typeof opts.onChange === 'function') opts.onChange();
         paintTop();
       });
       return c;
+    }
+
+    function buildPlan() {
+      plan = [];
+
+      /* unit intro */
+      var kick = el('div', 'unit-kicker');
+      kick.appendChild(el('span', 'unit-num', unit.order === 0 ? 'Foundation' : 'Unit ' + unit.order));
+      var intro = [{ node: kick, keep: true }, { node: el('h1', 'story-unit-title', unit.title), keep: true }];
+      if (unit.titleNative) intro.push({ node: native(unit.titleNative, lang, 'unit-title-native', 'div') });
+      if (unit.subtitle) intro.push({ node: el('p', 'unit-subtitle', unit.subtitle) });
+      unit.overview.forEach(function (p) { intro.push({ text: p }); });
+      if (unit.textbookBasis.length) intro.push({ node: basisBlock(unit) });
+      intro.push({ node: el('p', 'story-tapnote', 'Tap the right side to begin ›') });
+      addPages({ sec: -1, kind: 'intro', anchor: 'intro', cls: 'story-intro', blocks: intro });
+
+      unit.sections.forEach(function (sec, i) {
+        var kb = labels[i];
+
+        if (sec.type === 'dialogue') {
+          var db = [{ node: el('h2', 'story-sec-title', sec.title), keep: true }];
+          if (sec.context) db.push({ text: sec.context, cls: 'scene' });
+          db.push({ node: playAllButton(sec, lang) });
+          db.push({ node: el('p', 'story-tapnote', 'One line per card — tap through the conversation ›') });
+          addPages({ sec: i, kind: 'dlg-intro', anchor: 's' + i + ':intro', kicker: kb, blocks: db });
+          sec.lines.forEach(function (line, n) {
+            plan.push({ sec: i, kind: 'line', anchor: 's' + i + ':l' + n, node: lineCard(sec, i, line, n) });
+          });
+
+        } else if (sec.type === 'vocab') {
+          sec.items.forEach(function (item, n) {
+            var kw = kb + ' · word ' + (n + 1) + ' of ' + sec.items.length;
+            var full = vocabCard(item, lang);
+            var ling = full.querySelector('details.ling');
+            if (ling) ling.parentNode.removeChild(ling);
+            addPages({
+              sec: i, kind: 'vocab', anchor: 's' + i + ':v' + n, cls: 'story-vocab',
+              kicker: kw, term: item.term,
+              wrap: function () { return el('article', 'vcard'); },
+              blocks: Array.prototype.slice.call(full.childNodes).map(function (nd) { return { node: nd }; })
+            });
+
+            /* the linguistics reveal becomes its own page(s) — no expanding, no scrolling */
+            var lg = item.linguistics;
+            if (lg && typeof lg === 'object') {
+              var lb = [];
+              if (lg.origin) {
+                var orow = el('div', 'story-ling-origin');
+                orow.appendChild(el('span', 'chip chip-origin', lg.origin));
+                lb.push({ node: orow });
+              }
+              LING_FIELDS.forEach(function (f) {
+                var vals = lg[f.key];
+                if (typeof vals === 'string') vals = vals ? [vals] : [];
+                if (!U.isArr(vals) || !vals.length) return;
+                var h = el('h4', 'ling-h');
+                h.appendChild(el('span', 'ling-icon', f.icon));
+                h.appendChild(el('span', null, f.label));
+                lb.push({ node: h, keep: true });
+                vals.forEach(function (v) {
+                  if (typeof v === 'string' && v.trim()) lb.push({ text: v, cls: 'ling-p' });
+                });
+              });
+              if (lb.length) {
+                addPages({
+                  sec: i, kind: 'vocab-ling', anchor: 's' + i + ':v' + n + ':ling',
+                  cls: 'story-vocab-ling', term: item.term,
+                  kicker: item.term + ' · linguistics', blocks: lb
+                });
+              }
+            }
+          });
+
+        } else if (sec.type === 'grammar') {
+          sec.points.forEach(function (p, n) {
+            var gb = [];
+            var head = el('div', 'gpoint-head');
+            head.appendChild(el('span', 'gpoint-num', String(n + 1)));
+            head.appendChild(el('h3', 'gpoint-name', p.name));
+            gb.push({ node: head, keep: true });
+            if (p.pattern) {
+              var pat = el('div', 'gpattern');
+              pat.appendChild(el('span', 'gpattern-label', 'Pattern'));
+              pat.appendChild(el('code', 'gpattern-code', p.pattern));
+              gb.push({ node: pat, keep: true });
+            }
+            p.explanation.forEach(function (t) { gb.push({ text: t }); });
+            p.examples.forEach(function (e) {
+              var li = el('div', 'gex');
+              li.appendChild(native(e.text, lang, 'gex-text', 'div'));
+              if (e.roman) li.appendChild(el('div', 'gex-roman', e.roman));
+              if (e.gloss) li.appendChild(el('div', 'gex-gloss', e.gloss));
+              gb.push({ node: li });
+            });
+            addPages({
+              sec: i, kind: 'gpoint', anchor: 's' + i + ':g' + n,
+              kicker: kb + ' · point ' + (n + 1) + ' of ' + sec.points.length,
+              cls: 'story-grammar', blocks: gb
+            });
+          });
+
+        } else if (sec.type === 'notes') {
+          var nb = [{ node: el('h2', 'story-sec-title', sec.title), keep: true }];
+          sec.body.forEach(function (t) { nb.push({ text: t }); });
+          addPages({ sec: i, kind: 'notes', anchor: 's' + i + ':n', kicker: kb, blocks: nb });
+
+        } else if (sec.type === 'practice') {
+          if (!practiceNodes[i]) practiceNodes[i] = practiceCard(i);
+          plan.push({ sec: i, kind: 'practice', anchor: 's' + i + ':p', node: practiceNodes[i] });
+        }
+
+        plan.push({ sec: i, kind: 'end', anchor: 's' + i + ':end', build: function () { return endCard({ sec: i }); } });
+      });
+
+      secStart = [];
+      secCount = [];
+      plan.forEach(function (c, k) {
+        if (c.sec < 0) return;
+        if (secStart[c.sec] === undefined) secStart[c.sec] = k;
+        secCount[c.sec] = (secCount[c.sec] || 0) + 1;
+      });
+    }
+
+    function findAnchor(anchor, sec) {
+      for (var k = 0; k < plan.length; k++) if (plan[k].anchor === anchor) return k;
+      if (sec >= 0 && secStart[sec] !== undefined) return secStart[sec];
+      return 0;
     }
 
     function endCard(card) {
@@ -930,21 +1102,6 @@ window.FableLesson = (function () {
       return c;
     }
 
-    function buildCard(k) {
-      var card = plan[k];
-      switch (card.kind) {
-        case 'intro': return introCard();
-        case 'dlg-intro': return dlgIntroCard(card);
-        case 'dlg-line': return lineCard(card);
-        case 'vocab': return vocabStoryCard(card);
-        case 'gpoint': return gpointCard(card);
-        case 'notes': return notesCard(card);
-        case 'practice': return practiceCard(card);
-        case 'end': return endCard(card);
-      }
-      return el('div', 'story-card');
-    }
-
     /* ---- painting */
 
     function paintTop() {
@@ -966,29 +1123,31 @@ window.FableLesson = (function () {
     }
 
     var pos = -1;
-    var cache = {};   /* only the practice card is cached — the quiz session must survive back/forward */
 
     function show(k, dir, force) {
+      if (!plan.length) return;
       k = Math.max(0, Math.min(plan.length - 1, k));
       if (k === pos && !force) return;
       pos = k;
       var card = plan[k];
 
-      if (card.kind === 'vocab') { try { P.vocabSeen(lang, card.item.term); } catch (e) {} }
+      if (card.term) { try { P.vocabSeen(lang, card.term); } catch (e) {} }
       if (card.kind === 'end' && unit.sections[card.sec].type !== 'practice'
           && !P.isSectionComplete(lang, unit.id, card.sec)) {
         P.markSection(lang, unit.id, card.sec, true);
         if (typeof opts.onChange === 'function') opts.onChange();
       }
 
-      var node = cache[k] || buildCard(k);
-      if (card.kind === 'practice') cache[k] = node;
+      var node = card.node || card.build();
       U.clear(stage);
       stage.appendChild(node);
       node.classList.remove('in', 'in-back');
       void node.offsetWidth;
       node.classList.add(dir < 0 ? 'in-back' : 'in');
       node.scrollTop = 0;
+      /* last-resort: if an unpaginated card still overflows (extreme viewport),
+       * scrolling beats clipped, unreachable text */
+      if (node.scrollHeight > node.clientHeight + 1) node.classList.add('story-scroll');
 
       paintTop();
       prevB.disabled = (pos === 0);
@@ -1036,13 +1195,45 @@ window.FableLesson = (function () {
 
     root.appendChild(story);
 
-    var start = Number(opts.startSection);
-    var k0 = 0;
-    if (isFinite(start) && start >= 0 && start < unit.sections.length && secStart[start] !== undefined) {
-      k0 = secStart[start];
+    /* Pagination needs the story laid out in the document (the view is attached
+     * by the router just after this returns), so the first build is deferred. */
+    setTimeout(function () {
+      if (!document.body.contains(stage)) return;
+      buildPlan();
+      var start = Number(opts.startSection);
+      var k0 = 0;
+      if (isFinite(start) && start >= 0 && start < unit.sections.length && secStart[start] !== undefined) {
+        k0 = secStart[start];
+      }
+      show(k0, 1, true);
+      try { story.focus({ preventScroll: true }); } catch (e) {}
+    }, 0);
+
+    /* Rotation / resize changes the page size → repaginate, staying on the same
+     * content via its anchor. The listener dies with the story. */
+    var lastW = 0, lastH = 0, rzTimer = 0;
+    function onResize() {
+      if (!document.body.contains(stage)) {
+        window.removeEventListener('resize', onResize);
+        return;
+      }
+      if (rzTimer) clearTimeout(rzTimer);
+      rzTimer = setTimeout(function () {
+        rzTimer = 0;
+        var r = stage.getBoundingClientRect();
+        if (Math.abs(r.width - lastW) < 24 && Math.abs(r.height - lastH) < 24) return;
+        lastW = r.width; lastH = r.height;
+        if (!plan.length) return;
+        var cur = plan[pos] || {};
+        buildPlan();
+        show(findAnchor(cur.anchor, cur.sec), 0, true);
+      }, 200);
     }
-    show(k0, 1, true);
-    setTimeout(function () { try { story.focus({ preventScroll: true }); } catch (e) {} }, 0);
+    setTimeout(function () {
+      var r = stage.getBoundingClientRect();
+      lastW = r.width; lastH = r.height;
+      window.addEventListener('resize', onResize);
+    }, 0);
 
     return story;
   }

@@ -255,7 +255,8 @@ Apps Script URL, export/import, voice test). All units always clickable (require
   deck (`viewUnit` picks per `matchMedia`, re-rendering when the breakpoint is
   crossed; `body.story-open` locks page scroll and is cleared by every route render).
   The unit is flattened into cards: intro → per-section runs (one card per dialogue
-  line / vocab word / grammar point, notes 2 paragraphs per card, the whole quiz as
+  line / vocab word / grammar point — a word's linguistics notes become their own
+  page(s) after the word, no expander — plus notes pages and the whole quiz as
   one card) each closed by an end card. Navigation: tap right/left thirds of the
   stage (guarded so links, buttons, speakables, details and the quiz never advance),
   horizontal swipe, arrow keys, and floating ‹ › buttons. A segmented bar on top
@@ -263,6 +264,22 @@ Apps Script URL, export/import, voice test). All units always clickable (require
   so reloads resume nearby. Reading sections auto-mark complete when their end card
   is reached; the end card carries the undo toggle. The story sits at z 50 — above
   the topbar (40), below the tutor goblin (59/60), which stays usable mid-lesson.
+- **Story pages never scroll — they paginate.** `buildPlan()` runs after layout (and
+  again on a meaningful resize/rotation, re-finding the current page by its `anchor`
+  id): `fitBlocks()` measures each card's blocks inside a hidden `.story-meas` shell
+  on the real stage and greedily packs them into pages that fit. Overlong prose is
+  split at the sentence boundary nearest its middle with inline `<b>/<i>` tags closed
+  and reopened across the cut (`splitTextBlock`); heading blocks are `keep:true` so
+  they move to the next page instead of stranding at a page bottom; follow-up pages
+  repeat the kicker with `· continued`. The quiz card is the one deliberate scroller
+  (`story-scroll`); a page that still cannot fit (extreme viewport) falls back to
+  scrolling rather than clipping. Type steps down at `max-height` 700/600px so small
+  phones fit the same content. Verified by `_preview.html?audit=1` (untracked QA
+  harness) across all 20 units at 390×844, 375×667 and 320×568.
+- **Card entrance animation.** `.story-card.in/.in-back` combine a short slide
+  (`storyIn`/`storyBack`) with a left→right reveal: an animated `mask-image`
+  gradient (`storyWipe`, 520ms) sweeps the text in from the left. Disabled wholesale
+  under `prefers-reduced-motion: reduce`.
 
 ## Email backend contract (Agent MAIL + Agent APP) — v6: daily MINI-LESSON, email-only
 

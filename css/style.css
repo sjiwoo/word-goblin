@@ -1080,21 +1080,59 @@ body.story-open { overflow: hidden; }
 .story-stage { flex: 1 1 auto; min-height: 0; position: relative; }
 .story-card {
   position: absolute; inset: 0;
-  overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  overflow: hidden;                 /* pages are measured to FIT — no scrolling mid-lesson */
+  font-size: 1.05rem; line-height: 1.62;
   padding: 1.1rem 1.15rem calc(4.8rem + env(safe-area-inset-bottom, 0px));
 }
-.story-card.in { animation: storyIn 200ms cubic-bezier(.22,.61,.36,1) both; }
-.story-card.in-back { animation: storyBack 200ms cubic-bezier(.22,.61,.36,1) both; }
+.story-card.story-scroll {          /* practice quiz + rare unsplittable block only */
+  overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+}
+.story-meas { visibility: hidden; pointer-events: none; z-index: -1; }
+
+/* entrance: a soft slide plus the text fading in left → right */
+.story-card.in, .story-card.in-back {
+  -webkit-mask-image: linear-gradient(to right, #000 46%, transparent 64%);
+  mask-image: linear-gradient(to right, #000 46%, transparent 64%);
+  -webkit-mask-size: 240% 100%; mask-size: 240% 100%;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.story-card.in      { animation: storyIn 240ms cubic-bezier(.22,.61,.36,1) both, storyWipe 520ms ease-out both; }
+.story-card.in-back { animation: storyBack 240ms cubic-bezier(.22,.61,.36,1) both, storyWipe 520ms ease-out both; }
 @keyframes storyIn   { from { opacity: 0; transform: translateX(18px); }  to { opacity: 1; transform: none; } }
 @keyframes storyBack { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+@keyframes storyWipe {
+  from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+  to   { -webkit-mask-position: 0% 0;   mask-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-card.in, .story-card.in-back {
+    animation: none;
+    -webkit-mask-image: none; mask-image: none;
+  }
+}
 
 .story-sec-kicker {
   font-size: .68rem; letter-spacing: .14em; text-transform: uppercase;
   color: var(--ink-3); margin-bottom: .9rem;
+  font-family: var(--sans);         /* native-script kickers (word · linguistics) stay tidy */
 }
-.story-sec-title { font-size: 1.35rem; margin-bottom: .7rem; }
-.story-unit-title { font-size: clamp(1.9rem, 8vw, 2.5rem); margin: .35rem 0 .15rem; }
-.story-intro .unit-subtitle { margin-bottom: .9rem; }
+.story-sec-title { font-size: 1.45rem; margin-bottom: .7rem; }
+.story-unit-title { font-size: clamp(2rem, 8.5vw, 2.6rem); margin: .35rem 0 .15rem; }
+.story-intro .unit-subtitle { margin-bottom: .9rem; font-size: 1.08rem; }
+
+/* story typography runs a notch larger than the desktop panels */
+.story .vcard-term { font-size: 2.35rem; }
+.story .vcard-roman { font-size: 1.05rem; }
+.story .vcard-gloss { font-size: 1.08rem; }
+.story .vex-text { font-size: 1.25rem; }
+.story .gex-text { font-size: 1.25rem; }
+.story .ling-p { font-size: 1rem; }
+.story-ling-origin { margin-bottom: .9rem; }
+
+/* practice fits the page better compacted; it may still scroll as a fallback */
+.story .qcard { padding: 1.05rem .95rem; }
+.story .match-grid { grid-template-columns: 1fr 1fr; }
+.story .match-col:last-child { margin-top: 0; }
 
 .story-tapnote {
   margin-top: 1.6rem; color: var(--ink-3); font-size: .85rem; text-align: center;
@@ -1104,14 +1142,15 @@ body.story-open { overflow: hidden; }
 
 /* dialogue line cards: one big centred line per card */
 .story-line { display: flex; flex-direction: column; }
-.story-line-mid { margin: auto 0; text-align: center; padding: 1rem 0 3rem; }
+.story-line-mid { margin: auto 0; text-align: center; padding: 1rem 0 1.5rem; }
+.story-term-long { font-size: clamp(1.5rem, 6.5vw, 2.05rem); }
 .story-speaker { color: var(--ink-3); font-size: .95rem; margin-bottom: 1.1rem; justify-content: center; }
 .story-term {
-  font-size: clamp(1.9rem, 8.5vw, 2.7rem); line-height: 1.4;
+  font-size: clamp(2rem, 9vw, 2.9rem); line-height: 1.4;
   margin-bottom: 1rem; justify-content: center; flex-wrap: wrap;
 }
-.story-roman { color: var(--accent); font-size: 1.02rem; margin-bottom: .5rem; }
-.story-gloss { color: var(--ink-2); font-size: 1.05rem; }
+.story-roman { color: var(--accent); font-size: 1.1rem; margin-bottom: .5rem; }
+.story-gloss { color: var(--ink-2); font-size: 1.12rem; }
 
 .story-vocab .vcard { border-radius: var(--r); }
 
@@ -1154,6 +1193,42 @@ body.story-open { overflow: hidden; }
 .story-end .step-nav { flex: 0 0 auto; }
 .story-end-links { display: flex; flex-direction: column; gap: .6rem; margin-top: 1.2rem; }
 .story-end-links .btn { width: 100%; }
+
+/* short viewports (old/small phones): step the story type down a notch so the
+ * unpaginated cards — dialogue lines especially — still fit without scrolling */
+@media (max-height: 700px) {
+  .story-card { font-size: 1rem; line-height: 1.55; padding-bottom: calc(4.2rem + env(safe-area-inset-bottom, 0px)); }
+  .story-sec-kicker { margin-bottom: .6rem; }
+  .story-sec-title { font-size: 1.3rem; }
+  .story-unit-title { font-size: clamp(1.7rem, 7.5vw, 2.2rem); }
+  .story-term { font-size: clamp(1.7rem, 8vw, 2.3rem); }
+  .story-term-long { font-size: clamp(1.35rem, 6vw, 1.8rem); }
+  .story-speaker { margin-bottom: .7rem; }
+  .story-line-mid { padding: .6rem 0 1rem; }
+  .story-roman { font-size: 1rem; }
+  .story-gloss { font-size: 1.02rem; }
+  .story .vcard-term { font-size: 2rem; }
+  .story .vex-text, .story .gex-text { font-size: 1.15rem; }
+}
+
+/* very short viewports (iPhone-5 class): one more step down */
+@media (max-height: 600px) {
+  .story-card { padding-bottom: calc(3.9rem + env(safe-area-inset-bottom, 0px)); }
+  .story-term { font-size: clamp(1.5rem, 7vw, 2rem); }
+  .story-term-long { font-size: clamp(1.15rem, 5.4vw, 1.5rem); }
+  .story-roman { font-size: .92rem; }
+  .story-gloss { font-size: .95rem; }
+  .story .basis { padding: .55rem .7rem; }
+  .story .basis-list { font-size: .78rem; }
+}
+
+/* short viewports: tighten the end card so it never scrolls */
+@media (max-height: 760px) {
+  .story-end-mark { width: 3.2rem; height: 3.2rem; font-size: 1.5rem; margin-bottom: .7rem; }
+  .story-end-mid { padding-bottom: .6rem; }
+  .story-end-note { margin-bottom: .7rem; }
+  .story-end-links { margin-top: .6rem; gap: .45rem; }
+}
 
 /* Print: fall back to plain paper. */
 @media print {
